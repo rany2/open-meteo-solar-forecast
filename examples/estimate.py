@@ -1,33 +1,24 @@
 """Example of how to get an estimate from the Forecast.Solar API."""
 
 import asyncio
-from datetime import UTC, datetime, timedelta
-from pprint import pprint  # noqa: F401
+import dataclasses  # noqa
+from datetime import timedelta
+from pprint import pprint  # noqa
 
-from forecast_solar import ForecastSolar, ForecastSolarRatelimitError
+from open_meteo_solar_forecast import OpenMeteoSolarForecast
 
 
 async def main() -> None:
     """Get an estimate from the Forecast.Solar API."""
-    async with ForecastSolar(
+    async with OpenMeteoSolarForecast(
         latitude=52.16,
         longitude=4.47,
         declination=20,
         azimuth=10,
         kwp=2.160,
-        damping=0,
-        horizon="0,0,0,10,10,20,20,30,30",
+        efficiency_factor=0.9,
     ) as forecast:
-        try:
-            estimate = await forecast.estimate()
-        except ForecastSolarRatelimitError as err:
-            print("Ratelimit reached")
-            print(f"Rate limit resets at {err.reset_at}")
-            reset_period = err.reset_at - datetime.now(UTC)
-            # Strip microseconds as they are not informative
-            reset_period -= timedelta(microseconds=reset_period.microseconds)
-            print(f"That's in {reset_period}")
-            return
+        estimate = await forecast.estimate()
 
         # Uncomment this if you want to see what's in the estimate arrays
         # pprint(dataclasses.asdict(estimate))
@@ -70,8 +61,6 @@ async def main() -> None:
         print(f"energy_production next 12 hours: {estimate.sum_energy_production(12)}")
         print(f"energy_production next 24 hours: {estimate.sum_energy_production(24)}")
         print(f"timezone: {estimate.timezone}")
-        print(f"account_type: {estimate.account_type}")
-        print(forecast.ratelimit)
 
 
 if __name__ == "__main__":

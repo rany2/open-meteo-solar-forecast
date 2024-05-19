@@ -4,26 +4,16 @@
 -->
 
 ## Python API fetching Solarpanels forecast information.
-<!-- PROJECT SHIELDS -->
-![Project Maintenance][maintenance-shield]
-[![License][license-shield]](LICENSE)
-
-[![GitHub Activity][commits-shield]][commits]
-[![GitHub Last Commit][last-commit-shield]][commits]
-[![Contributors][contributors-shield]][contributors-url]
-
-[![Forks][forks-shield]][forks-url]
-[![Stargazers][stars-shield]][stars-url]
-[![Issues][issues-shield]][issues-url]
 
 ## About
 
-With this python library you can request data from [forecast.solar](https://forecast.solar) and see what your solar panels may produce in the coming days.
+With this python library you can request data from [Open-Meteo](https://open-meteo.com/)
+and see what your solar panels may produce in the coming days.
 
 ## Installation
 
 ```bash
-pip install forecast-solar
+pip install open-meteo-solar-forecast
 ```
 
 ## Data
@@ -64,22 +54,17 @@ This library returns a lot of different data, based on the API:
 ```python
 import asyncio
 
-from forecast_solar import ForecastSolar
+from open_meteo_solar_forecast import OpenMeteoSolarForecast
 
 
 async def main() -> None:
     """Show example on how to use the library."""
-    async with ForecastSolar(
-        api_key="YOUR_API_KEY",
+    async with OpenMeteoSolarForecast(
         latitude=52.16,
         longitude=4.47,
         declination=20,
         azimuth=10,
         kwp=2.160,
-        damping=0,
-        damping_morning=0.5,
-        damping_evening=0.5,
-        horizon="0,0,0,10,10,20,20,30,30",
     ) as forecast:
         estimate = await forecast.estimate()
         print(estimate)
@@ -91,15 +76,11 @@ if __name__ == "__main__":
 
 | Parameter | value type | Description |
 | --------- | ---------- | ----------- |
-| `api_key` | `str` | Your API key from [forecast.solar](https://forecast.solar) (optional) |
+| `base_url` | `str` | The base URL of the API (optional) |
+| `api_key` | `str` | Your API key (optional) |
 | `declination` | `int` | The tilt of the solar panels (required) |
 | `azimuth` | `int` | The direction the solar panels are facing (required) |
 | `kwp` | `float` | The size of the solar panels in kWp (required) |
-| `damping` | `float` | The damping of the solar panels, [read this][forecast-damping] for more information (optional) |
-| `damping_morning` | `float` | The damping of the solar panels in the morning (optional) |
-| `damping_evening` | `float` | The damping of the solar panels in the evening (optional) |
-| `inverter` | `float` | The maximum power of your inverter in kilo watts (optional) |
-| `horizon` | `str` | A list of **comma separated** degrees values, [read this][forecast-horizon] for more information (optional) |
 
 ## Contributing
 
@@ -131,17 +112,12 @@ poetry shell
 exit
 ```
 
-To run just the Python tests:
-
-```bash
-poetry run pytest
-```
-
 ## License
 
 MIT License
 
 Copyright (c) 2021-2024 Klaas Schoute
+Copyright (c) 2024 Rany
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -160,25 +136,6 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
-<!-- LINKS -->
-[forecast-horizon]: https://doc.forecast.solar/doku.php?id=api#horizon
-[forecast-damping]: https://doc.forecast.solar/doku.php?id=damping
-
-<!-- MARKDOWN LINKS & IMAGES -->
-[maintenance-shield]: https://img.shields.io/maintenance/yes/2024.svg?style=for-the-badge
-[contributors-shield]: https://img.shields.io/github/contributors/home-assistant-libs/forecast_solar.svg?style=for-the-badge
-[contributors-url]: https://github.com/home-assistant-libs/forecast_solar/graphs/contributors
-[forks-shield]: https://img.shields.io/github/forks/home-assistant-libs/forecast_solar.svg?style=for-the-badge
-[forks-url]: https://github.com/home-assistant-libs/forecast_solar/network/members
-[stars-shield]: https://img.shields.io/github/stars/home-assistant-libs/forecast_solar.svg?style=for-the-badge
-[stars-url]: https://github.com/home-assistant-libs/forecast_solar/stargazers
-[issues-shield]: https://img.shields.io/github/issues/home-assistant-libs/forecast_solar.svg?style=for-the-badge
-[issues-url]: https://github.com/home-assistant-libs/forecast_solar/issues
-[license-shield]: https://img.shields.io/github/license/home-assistant-libs/forecast_solar.svg?style=for-the-badge
-[commits-shield]: https://img.shields.io/github/commit-activity/y/home-assistant-libs/forecast_solar.svg?style=for-the-badge
-[commits]: https://github.com/home-assistant-libs/forecast_solar/commits/master
-[last-commit-shield]: https://img.shields.io/github/last-commit/home-assistant-libs/forecast_solar.svg?style=for-the-badge
 
 [poetry-install]: https://python-poetry.org/docs/#installation
 [poetry]: https://python-poetry.org

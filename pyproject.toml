@@ -1,14 +1,14 @@
 [tool.poetry]
-name = "forecast-solar"
-version = "0.0.0"
+name = "open-meteo-solar-forecast"
+version = "0.0.6"
 description = "Asynchronous Python client for getting forecast solar information"
-authors = ["Klaas Schoute <hello@student-techlife.com>"]
-maintainers = ["Klaas Schoute <hello@student-techlife.com>"]
+authors = ["Klaas Schoute <hello@student-techlife.com>", "Rany <rany@riseup.net>"]
+maintainers = ["Rany <rany@riseup.net>"]
 license = "MIT"
 readme = "README.md"
-homepage = "https://github.com/home-assistant-libs/forecast_solar"
-repository = "https://github.com/home-assistant-libs/forecast_solar"
-documentation = "https://github.com/home-assistant-libs/forecast_solar"
+homepage = "https://github.com/rany2/open-meteo-solar-forecast"
+repository = "https://github.com/rany2/open-meteo-solar-forecast"
+documentation = "https://github.com/rany2/open-meteo-solar-forecast"
 keywords = ["forecast", "solar", "power", "energy", "api", "async", "client"]
 classifiers = [
     "Framework :: AsyncIO",
@@ -21,38 +21,24 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 packages = [
-    { include = "forecast_solar", from = "src" },
+    { include = "open_meteo_solar_forecast", from = "src" },
 ]
 
 [tool.poetry.dependencies]
 aiohttp = ">=3.0.0"
-aiodns = ">=3.0.0"
 python = "^3.11"
-yarl = ">=1.6.0"
 
 [tool.poetry.urls]
-"Bug Tracker" = "https://github.com/home-assistant-libs/forecast_solar/issues"
-Changelog = "https://github.com/home-assistant-libs/forecast_solar/releases"
+"Bug Tracker" = "https://github.com/rany2/open-meteo-solar-forecast/issues"
+Changelog = "https://github.com/rany2/open-meteo-solar-forecast/releases"
 
 [tool.poetry.group.dev.dependencies]
 aresponses = "3.0.0"
 covdefaults = "2.3.0"
 mypy = "1.10.0"
-pytest = "8.1.1"
-pytest-asyncio = "0.23.6"
-pytest-cov = "5.0.0"
-pytest-freezer = "0.4.8"
 ruff = "0.4.2"
 syrupy = "4.6.1"
 yamllint = "1.35.1"
-
-[tool.coverage.run]
-plugins = ["covdefaults"]
-source = ["forecast_solar"]
-
-[tool.coverage.report]
-fail_under = 90
-show_missing = true
 
 [tool.mypy]
 # Specify the target platform details in config, so your developers are
@@ -88,10 +74,6 @@ warn_return_any = true
 warn_unused_configs = true
 warn_unused_ignores = true
 
-[tool.pytest.ini_options]
-addopts = "--cov"
-asyncio_mode = "auto"
-
 [tool.ruff]
 target-version = "py311"
 lint.select = ["ALL"]
@@ -112,12 +94,8 @@ lint.ignore = [
   "ISC001",
 ]
 
-[tool.ruff.lint.flake8-pytest-style]
-mark-parentheses = false
-fixture-parentheses = false
-
 [tool.ruff.lint.isort]
-known-first-party = ["forecast_solar"]
+known-first-party = ["open_meteo_solar_forecast"]
 
 [tool.ruff.lint.mccabe]
 max-complexity = 25
