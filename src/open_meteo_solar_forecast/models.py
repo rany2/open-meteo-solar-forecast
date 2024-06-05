@@ -98,7 +98,8 @@ class Estimate:
         """Return the estimated energy production for the current hour."""
         return _interval_value_sum(
             self.now().replace(minute=0, second=0, microsecond=0),
-            self.now().replace(minute=0, second=0, microsecond=0) + dt.timedelta(hours=1),
+            self.now().replace(minute=0, second=0, microsecond=0)
+            + dt.timedelta(hours=1),
             self.wh_period,
         )
 

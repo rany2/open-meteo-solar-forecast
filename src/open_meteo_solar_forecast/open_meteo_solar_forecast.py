@@ -158,6 +158,8 @@ class OpenMeteoSolarForecast:
         temp_arr = data["minutely_15"]["temperature_2m"]
         wind_arr = [
             wind_speed * 1000 / 3600
+            if wind_speed is not None
+            else None
             for wind_speed in data["minutely_15"]["wind_speed_10m"]
         ]
         utc_offset = data["utc_offset_seconds"]
@@ -208,6 +210,15 @@ class OpenMeteoSolarForecast:
             # Skip the first element as we need the previous element to calculate
             # the average temperature and wind speed for the current time
             if i - 1 < 0:
+                continue
+
+            # Skip none-values
+            if None in (
+                gti_avg_arr[i],
+                gti_inst_arr[i],
+                *temp_arr[i - 1 : i + 1],
+                *wind_arr[i - 1 : i + 1],
+            ):
                 continue
 
             # Get the global tilted irradiance for average and instantaneous values
