@@ -154,7 +154,7 @@ class OpenMeteoSolarForecast:
             params=params,
         )
         gti_avg_arr = data["minutely_15"]["global_tilted_irradiance"]
-        gti_instant_arr = data["minutely_15"]["global_tilted_irradiance_instant"]
+        gti_inst_arr = data["minutely_15"]["global_tilted_irradiance_instant"]
         temp_arr = data["minutely_15"]["temperature_2m"]
         wind_arr = [
             wind_speed * 1000 / 3600
@@ -198,41 +198,35 @@ class OpenMeteoSolarForecast:
             temp_cell *= TEMP_NOCT_CELL - TEMP_NOCT_AMB
             temp_cell *= 1 - (CELL_EFFICIENCY / TRANSMITTANCE_ABSORPTION)
             temp_cell += t_amb
-            power = (
-                peak_power
-                * (gti / G_STC)
-                * (1 + ALPHA_TEMP * (temp_cell - TEMP_STC_CELL))
-            ) * self.efficiency_factor
+            power = peak_power
+            power *= gti / G_STC
+            power *= 1 + ALPHA_TEMP * (temp_cell - TEMP_STC_CELL)
+            power *= self.efficiency_factor
             return round(max(0, power))
 
         for i, time in enumerate(time_arr):
-            # If any of the values are missing, skip the iteration
-            if None in (
-                gti_avg_arr[i],
-                gti_instant_arr[i],
-                *(temp_arr[i], temp_arr[i - 1] if i > 0 else temp_arr[i]),
-                *(wind_arr[i], wind_arr[i - 1] if i > 0 else wind_arr[i]),
-            ):
+            # Skip the first element as we need the previous element to calculate
+            # the average temperature and wind speed for the current time
+            if i - 1 < 0:
                 continue
 
-            # Total radiation received on a tilted pane
+            # Get the global tilted irradiance for average and instantaneous values
             g_avg = gti_avg_arr[i]
-            g_inst = gti_instant_arr[i]
+            g_inst = gti_inst_arr[i]
 
-            # Get the temperature and wind speed for instant and average values
-            temp_avg = (temp_arr[i] + temp_arr[i - 1]) / 2 if i > 0 else temp_arr[i]
-            wind_avg = (wind_arr[i] + wind_arr[i - 1]) / 2 if i > 0 else wind_arr[i]
-            temp_inst = temp_arr[i]
-            wind_inst = wind_arr[i]
+            # Get the temperature and wind speed for average and instantaneous values
+            temp_avg = (temp_arr[i] + temp_arr[i - 1]) / 2
+            wind_avg = (wind_arr[i] + wind_arr[i - 1]) / 2
+            temp_inst = temp_arr[i - 1]
+            wind_inst = wind_arr[i - 1]
 
-            # For minutely data, the average is taken over 15 minutes whereas
-            # the instant data is for the current minute only
-            time_start_inst = time
-            time_start_avg = time - timedelta(minutes=15)
+            # For minutely data, the radiation start time is 15 minutes before the time
+            # even for instantaneous data (since the data is averaged over 15 minutes)
+            time_start = time - timedelta(minutes=15)
 
             # Calculate and store the power generated
-            w_avg[time_start_avg] = gen_power(g_avg, temp_avg, wind_avg)
-            w_inst[time_start_inst] = gen_power(g_inst, temp_inst, wind_inst)
+            w_avg[time_start] = gen_power(g_avg, temp_avg, wind_avg)
+            w_inst[time_start] = gen_power(g_inst, temp_inst, wind_inst)
 
         # Calculate the average power generated per hour
         wh_period: dict[dt, int] = {}
