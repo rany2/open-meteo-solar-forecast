@@ -195,7 +195,7 @@ class OpenMeteoSolarForecast:
 
             temp_cell = gti / G_NOCT
             temp_cell *= hw_v(WIND_NOCT_SPEED) / hw_v(wind_speed)
-            temp_cell *= TEMP_NOCT_CELL - t_amb
+            temp_cell *= TEMP_NOCT_CELL - TEMP_NOCT_AMB
             temp_cell *= 1 - (CELL_EFFICIENCY / TRANSMITTANCE_ABSORPTION)
             temp_cell += t_amb
             power = (
