@@ -15,7 +15,7 @@ async def main() -> None:
         longitude=4.47,
         declination=20,
         azimuth=10,
-        kwp=2.160,
+        dc_kwp=2.160,
         efficiency_factor=0.9,
     ) as forecast:
         estimate = await forecast.estimate()

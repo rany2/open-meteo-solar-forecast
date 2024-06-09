@@ -37,15 +37,16 @@ class OpenMeteoSolarForecast:
 
     azimuth: float
     declination: float
-    kwp: float
+    dc_kwp: float
     latitude: float
     longitude: float
 
     past_days: int = 92
     forecast_days: int = 16
 
-    base_url: str | None = None
+    ac_kwp: float | None = None
     api_key: str | None = None
+    base_url: str | None = None
     efficiency_factor: float = 1.0
 
     session: ClientSession | None = None
@@ -55,6 +56,8 @@ class OpenMeteoSolarForecast:
         """Initialize the OpenMeteoSolarForecast object."""
         if self.base_url is None:
             self.base_url = "https://api.open-meteo.com"
+        if self.ac_kwp is None:
+            self.ac_kwp = self.dc_kwp
 
     async def _request(
         self,
@@ -157,9 +160,7 @@ class OpenMeteoSolarForecast:
         gti_inst_arr = data["minutely_15"]["global_tilted_irradiance_instant"]
         temp_arr = data["minutely_15"]["temperature_2m"]
         wind_arr = [
-            wind_speed * 1000 / 3600
-            if wind_speed is not None
-            else None
+            wind_speed * 1000 / 3600 if wind_speed is not None else None
             for wind_speed in data["minutely_15"]["wind_speed_10m"]
         ]
         utc_offset = data["utc_offset_seconds"]
@@ -170,7 +171,9 @@ class OpenMeteoSolarForecast:
             for time in data["minutely_15"]["time"]
         ]
 
-        peak_power = self.kwp * 1000  # Convert kW to W
+        # Convert kW to W
+        dc_wp = self.dc_kwp * 1000
+        ac_wp = self.ac_kwp * 1000
 
         w_avg: dict[dt, int] = {}
         w_inst: dict[dt, int] = {}
@@ -200,11 +203,11 @@ class OpenMeteoSolarForecast:
             temp_cell *= TEMP_NOCT_CELL - TEMP_NOCT_AMB
             temp_cell *= 1 - (CELL_EFFICIENCY / TRANSMITTANCE_ABSORPTION)
             temp_cell += t_amb
-            power = peak_power
+            power = dc_wp
             power *= gti / G_STC
             power *= 1 + ALPHA_TEMP * (temp_cell - TEMP_STC_CELL)
             power *= self.efficiency_factor
-            return round(max(0, power))
+            return round(max(0, min(power, ac_wp)))
 
         for i, time in enumerate(time_arr):
             # Skip the first element as we need the previous element to calculate
