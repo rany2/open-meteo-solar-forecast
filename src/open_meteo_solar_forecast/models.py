@@ -36,6 +36,37 @@ def _interval_value_sum(
     return total
 
 
+def _interval_value_sum_w_to_wh(
+    interval_begin: dt.datetime, interval_end: dt.datetime, data: dict[dt.datetime, int]
+) -> int:
+    """Convert W to Wh and return the sum of values in interval."""
+    total = 0
+    sorted_timestamps = sorted(data.keys())
+
+    for i, timestamp in enumerate(sorted_timestamps):
+        # Skip all until this hour
+        if timestamp < interval_begin:
+            continue
+
+        if timestamp >= interval_end:
+            break
+
+        # Calculate the time difference to the next timestamp or interval_end
+        next_timestamp = (
+            sorted_timestamps[i + 1] if i + 1 < len(sorted_timestamps) else interval_end
+        )
+        if next_timestamp > interval_end:
+            next_timestamp = interval_end
+
+        # Calculate the duration in hours
+        duration_hours = (next_timestamp - timestamp).total_seconds() / 3600
+
+        # Add the energy in watt-hours
+        total += data[timestamp] * duration_hours
+
+    return total
+
+
 @dataclass
 class Estimate:
     """Object holding estimate forecast results from Forecast.Solar.
@@ -71,11 +102,11 @@ class Estimate:
     @property
     def energy_production_today_remaining(self) -> int:
         """Return estimated energy produced in rest of today."""
-        return _interval_value_sum(
+        return _interval_value_sum_w_to_wh(
             self.now(),
             self.now().replace(hour=0, minute=0, second=0, microsecond=0)
             + dt.timedelta(days=1),
-            self.wh_period,
+            self.watts,
         )
 
     @property
