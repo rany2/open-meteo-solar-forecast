@@ -264,7 +264,7 @@ class OpenMeteoSolarForecast:
             gti_inst_arr = data["minutely_15"]["global_tilted_irradiance_instant"]
             temp_arr = data["minutely_15"]["temperature_2m"]
             wind_arr = [
-                wind_speed * 1000 / 3600
+                wind_speed * 1000 / 3600 if wind_speed is not None else None
                 for wind_speed in data["minutely_15"]["wind_speed_10m"]
             ]
 
