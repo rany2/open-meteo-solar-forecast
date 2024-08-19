@@ -244,6 +244,7 @@ class OpenMeteoSolarForecast:
                 """Calculate the linear damping coefficient."""
                 duration = end - start
                 elapsed = time - start
+                damping = 1.0 - damping  # Invert the damping factor
                 return (elapsed / duration) * (1.0 - damping) + damping
 
             if morning_start <= time <= morning_end:
