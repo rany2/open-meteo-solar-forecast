@@ -38,8 +38,8 @@ class OpenMeteoSolarForecast:
     ac_kwp: float | None = None
     api_key: str | None = None
     base_url: str | None = None
-    damping_morning: float | None = None
-    damping_evening: float | None = None
+    damping_morning: float | list[float] = 0.0
+    damping_evening: float | list[float] = 0.0
     efficiency_factor: float | list[float] = 1.0
 
     session: ClientSession | None = None
@@ -83,14 +83,19 @@ class OpenMeteoSolarForecast:
             self.latitude = [self.latitude]
             self.longitude = [self.longitude]
 
-        if isinstance(self.efficiency_factor, list):
-            if len(self.efficiency_factor) != len(self.dc_kwp):
-                raise OpenMeteoSolarForecastConfigError(
-                    "The efficiency factor must be of the same length as the other "
-                    "parameters"
-                )
-        else:
-            self.efficiency_factor = [self.efficiency_factor] * len(self.dc_kwp)
+        def validate_param_len(param: Any, other_param: list[Any]) -> list[Any]:
+            """Validate the length of a param and return a list of the same length."""
+            if isinstance(param, list):
+                if len(param) != len(other_param):
+                    msg = f"The {param} must be the same length as the other params"
+                    raise OpenMeteoSolarForecastConfigError(msg)
+            else:
+                param = [param] * len(other_param)
+            return param
+
+        self.efficiency_factor = validate_param_len(self.efficiency_factor, self.dc_kwp)
+        self.damping_morning = validate_param_len(self.damping_morning, self.dc_kwp)
+        self.damping_evening = validate_param_len(self.damping_evening, self.dc_kwp)
 
     async def _request(
         self,
@@ -256,20 +261,31 @@ class OpenMeteoSolarForecast:
             return 1
 
         utc_offset = None
-        for az, dec, dc_kwp, lat, lon, eff in zip(
+        for (
+            azimuth,
+            declination,
+            dc_kwp,
+            latitude,
+            lonitude,
+            efficiency,
+            damping_morning,
+            damping_evening,
+        ) in zip(
             self.azimuth,
             self.declination,
             self.dc_kwp,
             self.latitude,
             self.longitude,
             self.efficiency_factor,
+            self.damping_morning,
+            self.damping_evening,
             strict=True,
         ):
             params = {
-                "latitude": str(lat),
-                "longitude": str(lon),
-                "azimuth": str(az),
-                "tilt": str(dec),
+                "latitude": str(latitude),
+                "longitude": str(lonitude),
+                "azimuth": str(azimuth),
+                "tilt": str(declination),
                 "minutely_15": "temperature_2m"
                 ",global_tilted_irradiance,global_tilted_irradiance_instant",
                 "daily": "sunrise,sunset",
@@ -310,8 +326,6 @@ class OpenMeteoSolarForecast:
                 .replace(tzinfo=timezone(timedelta(seconds=utc_offset)))
                 for time in data["daily"]["sunset"]
             }
-            damping_morning = self.damping_morning or 0
-            damping_evening = self.damping_evening or 0
             damping_factors = [
                 calculate_damping_coefficient(
                     time,
@@ -354,7 +368,7 @@ class OpenMeteoSolarForecast:
                 time_start = time - timedelta(minutes=15)
 
                 # Add the damping factor to the efficiency
-                eff_damped = eff * damping_factors[i]
+                eff_damped = efficiency * damping_factors[i]
 
                 # Calculate and store the power generated
                 w_avg[time_start] += gen_power(g_avg, temp_avg, eff_damped)
