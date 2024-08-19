@@ -83,19 +83,20 @@ class OpenMeteoSolarForecast:
             self.latitude = [self.latitude]
             self.longitude = [self.longitude]
 
-        def validate_param_len(param: Any, other_param: list[Any]) -> list[Any]:
+        def test_param_len(attr_name: str, other_attr: list[Any]) -> list[Any]:
             """Validate the length of a param and return a list of the same length."""
-            if isinstance(param, list):
-                if len(param) != len(other_param):
-                    msg = f"The {param} must be the same length as the other params"
+            attr = getattr(self, attr_name)
+            if isinstance(attr, list):
+                if len(attr) != len(other_attr):
+                    msg = f"{attr_name} must be the same length as the other parameters"
                     raise OpenMeteoSolarForecastConfigError(msg)
             else:
-                param = [param] * len(other_param)
-            return param
+                attr = [attr] * len(other_attr)
+            return attr
 
-        self.efficiency_factor = validate_param_len(self.efficiency_factor, self.dc_kwp)
-        self.damping_morning = validate_param_len(self.damping_morning, self.dc_kwp)
-        self.damping_evening = validate_param_len(self.damping_evening, self.dc_kwp)
+        self.efficiency_factor = test_param_len("efficiency_factor", self.dc_kwp)
+        self.damping_morning = test_param_len("damping_morning", self.dc_kwp)
+        self.damping_evening = test_param_len("damping_evening", self.dc_kwp)
 
     async def _request(
         self,
