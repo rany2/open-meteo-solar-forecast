@@ -341,13 +341,12 @@ class OpenMeteoSolarForecast:
             dc_wp = dc_kwp * 1000
 
             for i, time in enumerate(time_arr):
-                # Skip the first element as we need the previous
-                # element to calculate the average temperature
-                # for the current time
+                # Skip the first element as we need the previous element to calculate
+                # the average temperature for the current time
                 if i - 1 < 0:
                     continue
 
-                # Skip none-values
+                # Skip if any of the values are None
                 if None in (
                     gti_avg_arr[i],
                     gti_inst_arr[i],
@@ -359,7 +358,7 @@ class OpenMeteoSolarForecast:
                 g_avg = gti_avg_arr[i]
                 g_inst = gti_inst_arr[i]
 
-                # Get the temp and wind speed for average and instantaneous values
+                # Get the temperature for average and instantaneous values
                 temp_avg = (temp_arr[i] + temp_arr[i - 1]) / 2
                 temp_inst = temp_arr[i - 1]
 
