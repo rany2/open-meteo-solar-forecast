@@ -64,7 +64,7 @@ async def main() -> None:
         longitude=4.47,
         declination=20,
         azimuth=10,
-        kwp=2.160,
+        dc_kwp=2.160,
     ) as forecast:
         estimate = await forecast.estimate()
         print(estimate)
@@ -80,7 +80,7 @@ if __name__ == "__main__":
 | `api_key` | `str` | Your API key (optional) |
 | `declination` | `int` | The tilt of the solar panels (required) |
 | `azimuth` | `int` | The direction the solar panels are facing (required) |
-| `kwp` | `float` | The size of the solar panels in kWp (required) |
+| `dc_kwp` | `float` | The size of the solar panels in kWp (required) |
 
 ## Contributing
 
