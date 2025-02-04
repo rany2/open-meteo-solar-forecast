@@ -144,8 +144,6 @@ class OpenMeteoSolarForecast:
             params = params or {}
             params["model"] = self.weather_model
 
-        print(params)
-
         # Get response from the API
         response = await self.session.request(
             "GET",
