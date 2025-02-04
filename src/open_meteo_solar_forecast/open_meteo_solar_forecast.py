@@ -38,6 +38,7 @@ class OpenMeteoSolarForecast:
     ac_kwp: float | None = None
     api_key: str | None = None
     base_url: str | None = None
+    weather_model: str | None = None
     damping_morning: float | list[float] = 0.0
     damping_evening: float | list[float] = 0.0
     efficiency_factor: float | list[float] = 1.0
@@ -137,6 +138,11 @@ class OpenMeteoSolarForecast:
         if self.api_key:
             params = params or {}
             params["apikey"] = self.api_key
+
+        # Add the weather model to the request
+        if self.weather_model:
+            params = params or {}
+            params["model"] = self.weather_model
 
         # Get response from the API
         response = await self.session.request(
