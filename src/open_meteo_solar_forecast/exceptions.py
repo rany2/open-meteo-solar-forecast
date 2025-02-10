@@ -23,3 +23,7 @@ class OpenMeteoSolarForecastRequestError(OpenMeteoSolarForecastError):
 
 class OpenMeteoSolarForecastRatelimitError(OpenMeteoSolarForecastRequestError):
     """OpenMeteoSolarForecast rate limit exception."""
+
+
+class OpenMeteoSolarForecastInvalidModel(OpenMeteoSolarForecastError):
+    """OpenMeteoSolarForecast invalid model exception."""

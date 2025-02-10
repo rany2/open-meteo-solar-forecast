@@ -16,6 +16,7 @@ from .exceptions import (
     OpenMeteoSolarForecastConfigError,
     OpenMeteoSolarForecastConnectionError,
     OpenMeteoSolarForecastError,
+    OpenMeteoSolarForecastInvalidModel,
     OpenMeteoSolarForecastRatelimitError,
     OpenMeteoSolarForecastRequestError,
 )
@@ -141,8 +142,12 @@ class OpenMeteoSolarForecast:
 
         # Add the weather model to the request
         if self.weather_model:
+            if "," in self.weather_model:
+                raise OpenMeteoSolarForecastInvalidModel(
+                    "Multiple models are not supported"
+                )
             params = params or {}
-            params["model"] = self.weather_model
+            params["models"] = self.weather_model
 
         # Get response from the API
         response = await self.session.request(
