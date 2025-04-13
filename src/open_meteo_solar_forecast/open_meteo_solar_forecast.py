@@ -10,7 +10,7 @@ from typing import Any, Self
 
 from aiohttp import ClientSession
 
-from .constants import ALPHA_TEMP, G_NOCT, G_STC, TEMP_STC_CELL, RossModelConstants
+from .constants import ALPHA_TEMP, G_STC, TEMP_STC_CELL, RossModelConstants
 from .exceptions import (
     OpenMeteoSolarForecastAuthenticationError,
     OpenMeteoSolarForecastConfigError,
