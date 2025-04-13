@@ -200,34 +200,22 @@ class OpenMeteoSolarForecast:
 
             Formulas:
             ---------
-                Assuming https://www.mdpi.com/2071-1050/14/3/1500 equation 1 + 2 as well as table 1
-                the formula:
-                
-                Tc=Ta + (G/Gnoct) * k
-                and
-                P=Pmax * (G/Gstc) * (1 + α * (Tc-Tstc)) * ηDC (p.509)
-                
-                must be:
-                
-                Tc=Ta + G * k
-                and
-                P=Pmax * G * (1 + α * (Tc-Tstc)) * ηDC (p.509)
-                
-                Where k is the Ross coefficient. Assuming that this is a typical
-                home installation, we use the "Not so well cooled" value from
-                Table 1 which is 0.0342. TODO: Make this configurable.
-                Source: https://www.researchgate.net/publication/275438802_Thermal_effects_of_the_extended_holographic_regions_for_holographic_planar_concentrator
+                According to https://www.mdpi.com/2071-1050/14/3/1500 (equations 1 and 2) and Table 1,
+                the temperature formula should be:
+                     Tc = Ta + G * k
+                where:
+                    - Tc is the cell temperature
+                    - Ta is the ambient temperature
+                    - G is the irradiance (W/m²)
+                    - k is the Ross coefficient
 
-                P=Pmax * (G/Gstc) * (1 + α * (Tc-Tstc)) * ηDC (p.509)
-                Source: https://www.researchgate.net/publication/372240079_Solar_Prediction_Strategy_for_Managing_Virtual_Power_Stations
-               
-                Instead of: 
-                
-                temp_cell = t_amb + (gti / G_NOCT) * RossModelConstants.NOT_SO_WELL_COOL
+                For a typical residential PV installation, we use the "Not so well cooled" Ross coefficient
+                from Table 1, which is 0.0342. (TODO: make this coefficient configurable.)
 
-                it must be:
-
-                temp_cell = t_amb + gti * RossModelConstants.NOT_SO_WELL_COOL
+                References:
+                    - Ross model source: https://www.researchgate.net/publication/275438802_Thermal_effects_of_the_extended_holographic_regions_for_holographic_planar_concentrator
+                    - Power output formula: P = Pmax * (G / Gstc) * (1 + α * (Tc - Tstc)) * ηDC (see p.509)
+                      Source: https://www.researchgate.net/publication/372240079_Solar_Prediction_Strategy_for_Managing_Virtual_Power_Stations
             """
             temp_cell = t_amb + gti * RossModelConstants.NOT_SO_WELL_COOL
             power = dc_wp
