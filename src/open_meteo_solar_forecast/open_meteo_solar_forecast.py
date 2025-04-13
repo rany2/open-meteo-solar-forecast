@@ -200,7 +200,19 @@ class OpenMeteoSolarForecast:
 
             Formulas:
             ---------
+                Assuming https://www.mdpi.com/2071-1050/14/3/1500 equation 1 + 2 as well as table 1
+                the formula:
+                
                 Tc=Ta + (G/Gnoct) * k
+                and
+                P=Pmax * (G/Gstc) * (1 + α * (Tc-Tstc)) * ηDC (p.509)
+                
+                must be:
+                
+                Tc=Ta + G * k
+                and
+                P=Pmax * G * (1 + α * (Tc-Tstc)) * ηDC (p.509)
+                
                 Where k is the Ross coefficient. Assuming that this is a typical
                 home installation, we use the "Not so well cooled" value from
                 Table 1 which is 0.0342. TODO: Make this configurable.
@@ -208,8 +220,16 @@ class OpenMeteoSolarForecast:
 
                 P=Pmax * (G/Gstc) * (1 + α * (Tc-Tstc)) * ηDC (p.509)
                 Source: https://www.researchgate.net/publication/372240079_Solar_Prediction_Strategy_for_Managing_Virtual_Power_Stations
+               
+                Instead of: 
+                
+                temp_cell = t_amb + (gti / G_NOCT) * RossModelConstants.NOT_SO_WELL_COOL
+
+                it must be:
+
+                temp_cell = t_amb + gti * RossModelConstants.NOT_SO_WELL_COOL
             """
-            temp_cell = t_amb + (gti / G_NOCT) * RossModelConstants.NOT_SO_WELL_COOLED
+            temp_cell = t_amb + gti * RossModelConstants.NOT_SO_WELL_COOL
             power = dc_wp
             power *= gti / G_STC
             power *= 1 + ALPHA_TEMP * (temp_cell - TEMP_STC_CELL)
