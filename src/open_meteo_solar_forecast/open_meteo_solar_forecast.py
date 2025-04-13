@@ -217,7 +217,7 @@ class OpenMeteoSolarForecast:
                     - Power output formula: P = Pmax * (G / Gstc) * (1 + α * (Tc - Tstc)) * ηDC (see p.509)
                       Source: https://www.researchgate.net/publication/372240079_Solar_Prediction_Strategy_for_Managing_Virtual_Power_Stations
             """
-            temp_cell = t_amb + gti * RossModelConstants.NOT_SO_WELL_COOL
+            temp_cell = t_amb + gti * RossModelConstants.NOT_SO_WELL_COOLED
             power = dc_wp
             power *= gti / G_STC
             power *= 1 + ALPHA_TEMP * (temp_cell - TEMP_STC_CELL)
