@@ -326,26 +326,20 @@ class OpenMeteoSolarForecast:
                 raise OpenMeteoSolarForecastConfigError(
                     "The UTC offset is not the same for all locations"
                 )
-            time_arr = [
-                dt.strptime(time, "%Y-%m-%dT%H:%M").replace(
-                    tzinfo=timezone(timedelta(seconds=utc_offset))
-                )
-                for time in data["minutely_15"]["time"]
-            ]
-            sunrise_dict = {
-                dt.strptime(time, "%Y-%m-%dT%H:%M")
-                .replace(tzinfo=timezone(timedelta(seconds=utc_offset)))
-                .date(): dt.strptime(time, "%Y-%m-%dT%H:%M")
-                .replace(tzinfo=timezone(timedelta(seconds=utc_offset)))
-                for time in data["daily"]["sunrise"]
-            }
-            sunset_dict = {
-                dt.strptime(time, "%Y-%m-%dT%H:%M")
-                .replace(tzinfo=timezone(timedelta(seconds=utc_offset)))
-                .date(): dt.strptime(time, "%Y-%m-%dT%H:%M")
-                .replace(tzinfo=timezone(timedelta(seconds=utc_offset)))
-                for time in data["daily"]["sunset"]
-            }
+
+            tz = timezone(timedelta(seconds=utc_offset))
+
+            def parse_time(iso_str: str) -> dt:
+                return dt.strptime(iso_str, "%Y-%m-%dT%H:%M").replace(tzinfo=tz)
+
+            time_arr = [parse_time(ts) for ts in data["minutely_15"]["time"]]
+
+            sunrise_times = [parse_time(ts) for ts in data["daily"]["sunrise"]]
+            sunrise_dict = {t.date(): t for t in sunrise_times}
+
+            sunset_times = [parse_time(ts) for ts in data["daily"]["sunset"]]
+            sunset_dict = {t.date(): t for t in sunset_times}
+
             damping_factors = [
                 calculate_damping_coefficient(
                     time,
