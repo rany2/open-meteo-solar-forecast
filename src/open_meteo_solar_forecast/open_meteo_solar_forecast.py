@@ -312,6 +312,7 @@ class OpenMeteoSolarForecast:
                 "forecast_days": str(self.forecast_days),
                 "past_days": str(self.past_days),
                 "timezone": "auto",
+                "timeformat": "unixtime",
             }
             data = await self._request(
                 "/v1/forecast",
@@ -329,26 +330,32 @@ class OpenMeteoSolarForecast:
 
             tz = timezone(timedelta(seconds=utc_offset))
 
-            def parse_time(iso_str: str) -> dt:
-                return dt.strptime(iso_str, "%Y-%m-%dT%H:%M").replace(tzinfo=tz)
+            time_arr = [
+                dt.fromtimestamp(ts, timezone.utc).astimezone(tz)
+                for ts in data["minutely_15"]["time"]
+            ]
 
-            time_arr = [parse_time(ts) for ts in data["minutely_15"]["time"]]
-
-            sunrise_times = [parse_time(ts) for ts in data["daily"]["sunrise"]]
+            sunrise_times = [
+                dt.fromtimestamp(ts, timezone.utc).astimezone(tz)
+                for ts in data["daily"]["sunrise"]
+            ]
             sunrise_dict = {t.date(): t for t in sunrise_times}
 
-            sunset_times = [parse_time(ts) for ts in data["daily"]["sunset"]]
+            sunset_times = [
+                dt.fromtimestamp(ts, timezone.utc).astimezone(tz)
+                for ts in data["daily"]["sunset"]
+            ]
             sunset_dict = {t.date(): t for t in sunset_times}
 
             damping_factors = [
                 calculate_damping_coefficient(
-                    time,
-                    sunrise_dict[time.date()],
-                    sunset_dict[time.date()],
+                    t,
+                    sunrise_dict[t.date()],
+                    sunset_dict[t.date()],
                     damping_morning,
                     damping_evening,
                 )
-                for time in time_arr
+                for t in time_arr
             ]
 
             # Convert kW to W
@@ -357,7 +364,7 @@ class OpenMeteoSolarForecast:
             for i, time in enumerate(time_arr):
                 # Skip the first element as we need the previous element to calculate
                 # the average temperature for the current time
-                if i - 1 < 0:
+                if i == 0:
                     continue
 
                 # Skip if any of the values are None
@@ -414,7 +421,7 @@ class OpenMeteoSolarForecast:
             watts=w_inst,
             wh_period=wh_period,
             wh_days=wh_days,
-            api_timezone=timezone(timedelta(seconds=utc_offset)),
+            api_timezone=tz,
         )
 
     async def close(self) -> None:
