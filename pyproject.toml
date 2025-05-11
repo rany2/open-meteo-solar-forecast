@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "open-meteo-solar-forecast"
-version = "0.1.21"
+version = "0.1.22"
 description = "Asynchronous Python client for getting forecast solar information"
 authors = ["Rany <rany@riseup.net>", "Klaas Schoute <hello@student-techlife.com>"]
 maintainers = ["Rany <rany@riseup.net>"]
