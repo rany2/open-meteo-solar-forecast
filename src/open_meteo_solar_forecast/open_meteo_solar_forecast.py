@@ -7,6 +7,9 @@ from dataclasses import dataclass
 from datetime import datetime as dt
 from datetime import timedelta, timezone
 from typing import Any, Self
+import suncalc
+import numpy
+import pytz
 
 from aiohttp import ClientSession
 
@@ -223,6 +226,26 @@ class OpenMeteoSolarForecast:
             power *= 1 + ALPHA_TEMP * (temp_cell - TEMP_STC_CELL)
             power *= eff
             return round(max(0, power))
+        
+        # check if the horizon blocks out direct sunlight
+        def check_horizon_shading(
+            time: dt,
+            lon: float,
+            lat: float,
+            hmap: float()
+        ) -> bool:
+            
+            position_rad = suncalc.get_position(time, lon, lat)
+            azimuth_deg = (180 + numpy.rad2deg(position_rad['azimuth'])) % 360
+            altitude_deg = numpy.rad2deg(position_rad['altitude'])
+            horizon_deg = numpy.interp(azimuth_deg,hmap[0],hmap[1])
+            
+            if altitude_deg < horizon_deg:
+                shading = True
+            else:
+                shading = False
+            
+            return shading
 
         def calculate_damping_coefficient(
             time: dt,
@@ -307,7 +330,7 @@ class OpenMeteoSolarForecast:
                 "azimuth": str(azimuth),
                 "tilt": str(declination),
                 "minutely_15": "temperature_2m"
-                ",global_tilted_irradiance,global_tilted_irradiance_instant",
+                ",global_tilted_irradiance,global_tilted_irradiance_instant,diffuse_radiation,diffuse_radiation_instant",
                 "daily": "sunrise,sunset",
                 "forecast_days": str(self.forecast_days),
                 "past_days": str(self.past_days),
@@ -320,6 +343,8 @@ class OpenMeteoSolarForecast:
             )
             gti_avg_arr = data["minutely_15"]["global_tilted_irradiance"]
             gti_inst_arr = data["minutely_15"]["global_tilted_irradiance_instant"]
+            dhi_avg_arr = data["minutely_15"]["diffuse_radiation"]
+            dhi_inst_arr = data["minutely_15"]["diffuse_radiation_instant"]
             temp_arr = data["minutely_15"]["temperature_2m"]
             if utc_offset is None:
                 utc_offset = data["utc_offset_seconds"]
@@ -357,6 +382,17 @@ class OpenMeteoSolarForecast:
                 )
                 for t in time_arr
             ]
+                     
+            # DUMMY HORIZON DATA - THIS HAST TO BE CONFIGURABLE VIA CONFIG
+            #horizon_map = [[0,0],[360,0]] # test horizon (0° altitude all around)            
+            #horizon_map = [[0,30],[360,30]] # test horizon (30° altitude all around)
+            horizon_map = [[0,7.2],[16,6.1],[19.6,4],[26.8,5.6],[45,9.8],[53.4,13.7],[102.7,19.8],[138.6,16.6],[145.1,12.7],[146.6,14.4],[191.9,20.8],[210.7,20.1],[209.9,32.1],[215.3,48.5],[219.6,57.7],[235.2,55],[249.3,51.7],[255.2,46.2],[265.1,38.7],[271.7,28.8],[277.7,18.4],[282.2,18],[288.8,13.4],[292.6,15.5],[300.7,17],[306,21.1],[310.2,21],[314.8,12.6],[325.6,10.7],[332.3,6.7],[334.9,7.1],[342.8,5.8],[360,7.2]] # my actual horizon map
+            
+            hmap_arr = numpy.array(horizon_map).T # convert list of tuples to numpy array
+            horizon_shading = [
+                check_horizon_shading(t,lonitude,latitude,hmap_arr)
+                for t in time_arr
+            ]
 
             # Convert kW to W
             dc_wp = dc_kwp * 1000
@@ -378,6 +414,8 @@ class OpenMeteoSolarForecast:
                 # Get the GTI for average and instantaneous values
                 g_avg = gti_avg_arr[i]
                 g_inst = gti_inst_arr[i]
+                d_avg = dhi_avg_arr[i]
+                d_inst = dhi_inst_arr[i]
 
                 # Get the temperature for average and instantaneous values
                 temp_avg = (temp_arr[i] + temp_arr[i - 1]) / 2
@@ -389,10 +427,18 @@ class OpenMeteoSolarForecast:
 
                 # Add the damping factor to the efficiency
                 eff_damped = efficiency * damping_factors[i]
+                
+                # Check for horizon shading - if shaded, apply diffuse radiation
+                if horizon_shading[i]:
+                    irr_avg = d_avg
+                    irr_inst = d_inst
+                else:
+                    irr_avg = g_avg
+                    irr_inst = g_inst
 
                 # Calculate and store the power generated
-                w_avg[time_start] += gen_power(g_avg, temp_avg, eff_damped)
-                w_inst[time_start] += gen_power(g_inst, temp_inst, eff_damped)
+                w_avg[time_start] += gen_power(irr_avg, temp_avg, eff_damped)
+                w_inst[time_start] += gen_power(irr_inst, temp_inst, eff_damped)
 
         # Clamp the power generated to the AC power
         ac_wp = self.ac_kwp * 1000  # Convert kW to W
