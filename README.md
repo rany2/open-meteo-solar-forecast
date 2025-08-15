@@ -65,6 +65,8 @@ async def main() -> None:
         declination=20,
         azimuth=10,
         dc_kwp=2.160,
+		use_horizon=True,
+        horizon_map=((0,30),(360,30),
     ) as forecast:
         estimate = await forecast.estimate()
         print(estimate)
@@ -81,6 +83,10 @@ if __name__ == "__main__":
 | `declination` | `int` | The tilt of the solar panels (required) |
 | `azimuth` | `int` | The direction the solar panels are facing (required) |
 | `dc_kwp` | `float` | The size of the solar panels in kWp (required) |
+| `use_horizon` | `bool` | Whether to use horizon shading (optional, default = False) |
+| `horizon_map` | `tuple of 2-tuples` | Map of the horizon* (required if use_horizon = True) |
+
+*) The horizon map is a tuple of 2-tuples, where each 2-tuple consists of (azimuth,elevation). Azimuth is the compass direction in degrees (0° = north, 180° = south). The horizon map has to cover the whole range of azimuths that the sun travels through over the year (recommendation: plot the horizon from 0 to 360°). Elevation is the associated angle in degrees of any object (hill, tree, ...) casting a shadow on the modules. The elevation angle has to be in the range 0° (flat, ideal horizon) to 90° (in the sky directly over the modules). The map has to be monotonic on the azimuth axis, however this is not checked by the script! Elevation values in between are interpolated along the azimuth axis, thus non-monotonic values will give wrong results.
 
 ## Contributing
 

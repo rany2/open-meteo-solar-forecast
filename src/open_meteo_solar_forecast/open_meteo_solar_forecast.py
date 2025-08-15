@@ -7,6 +7,9 @@ from dataclasses import dataclass
 from datetime import datetime as dt
 from datetime import timedelta, timezone
 from typing import Any, Self
+import suncalc
+import numpy
+import pytz
 
 from aiohttp import ClientSession
 
@@ -43,6 +46,8 @@ class OpenMeteoSolarForecast:
     damping_morning: float | list[float] = 0.0
     damping_evening: float | list[float] = 0.0
     efficiency_factor: float | list[float] = 1.0
+    use_horizon: bool | list[bool] = False
+    horizon_map: tuple(tuple(float)) | list[tuple(tuple(float))] = ((0,0),(360,0))
 
     session: ClientSession | None = None
     _close_session: bool = False
@@ -99,6 +104,8 @@ class OpenMeteoSolarForecast:
         self.efficiency_factor = test_param_len("efficiency_factor", self.dc_kwp)
         self.damping_morning = test_param_len("damping_morning", self.dc_kwp)
         self.damping_evening = test_param_len("damping_evening", self.dc_kwp)
+        self.use_horizon = test_param_len("use_horizon", self.dc_kwp)
+        self.horizon_map = test_param_len("horizon_map", self.dc_kwp)
 
     async def _request(
         self,
@@ -223,6 +230,26 @@ class OpenMeteoSolarForecast:
             power *= 1 + ALPHA_TEMP * (temp_cell - TEMP_STC_CELL)
             power *= eff
             return round(max(0, power))
+        
+        # check if the horizon blocks out direct sunlight
+        def check_horizon_shading(
+            time: dt,
+            lon: float,
+            lat: float,
+            hmap: float()
+        ) -> bool:
+            
+            position_rad = suncalc.get_position(time, lon, lat)
+            azimuth_deg = (180 + numpy.rad2deg(position_rad['azimuth'])) % 360
+            altitude_deg = numpy.rad2deg(position_rad['altitude'])
+            horizon_deg = numpy.interp(azimuth_deg,hmap[0],hmap[1])
+            
+            if altitude_deg < horizon_deg:
+                shading = True
+            else:
+                shading = False
+            
+            return shading
 
         def calculate_damping_coefficient(
             time: dt,
@@ -290,6 +317,8 @@ class OpenMeteoSolarForecast:
             efficiency,
             damping_morning,
             damping_evening,
+            use_horizon,
+            horizon_map,
         ) in zip(
             self.azimuth,
             self.declination,
@@ -299,6 +328,8 @@ class OpenMeteoSolarForecast:
             self.efficiency_factor,
             self.damping_morning,
             self.damping_evening,
+            self.use_horizon,
+            self.horizon_map,
             strict=True,
         ):
             params = {
@@ -307,7 +338,7 @@ class OpenMeteoSolarForecast:
                 "azimuth": str(azimuth),
                 "tilt": str(declination),
                 "minutely_15": "temperature_2m"
-                ",global_tilted_irradiance,global_tilted_irradiance_instant",
+                ",global_tilted_irradiance,global_tilted_irradiance_instant,diffuse_radiation,diffuse_radiation_instant",
                 "daily": "sunrise,sunset",
                 "forecast_days": str(self.forecast_days),
                 "past_days": str(self.past_days),
@@ -320,6 +351,8 @@ class OpenMeteoSolarForecast:
             )
             gti_avg_arr = data["minutely_15"]["global_tilted_irradiance"]
             gti_inst_arr = data["minutely_15"]["global_tilted_irradiance_instant"]
+            dhi_avg_arr = data["minutely_15"]["diffuse_radiation"]
+            dhi_inst_arr = data["minutely_15"]["diffuse_radiation_instant"]
             temp_arr = data["minutely_15"]["temperature_2m"]
             if utc_offset is None:
                 utc_offset = data["utc_offset_seconds"]
@@ -357,6 +390,18 @@ class OpenMeteoSolarForecast:
                 )
                 for t in time_arr
             ]
+                     
+            if use_horizon:
+                hmap_arr = numpy.array(horizon_map).T # convert list of tuples to numpy array
+                horizon_shading = [
+                    check_horizon_shading(t,lonitude,latitude,hmap_arr)
+                    for t in time_arr
+                ]
+            else:
+                horizon_shading = [
+                    False
+                    for t in time_arr
+                ]
 
             # Convert kW to W
             dc_wp = dc_kwp * 1000
@@ -378,6 +423,8 @@ class OpenMeteoSolarForecast:
                 # Get the GTI for average and instantaneous values
                 g_avg = gti_avg_arr[i]
                 g_inst = gti_inst_arr[i]
+                d_avg = dhi_avg_arr[i]
+                d_inst = dhi_inst_arr[i]
 
                 # Get the temperature for average and instantaneous values
                 temp_avg = (temp_arr[i] + temp_arr[i - 1]) / 2
@@ -389,10 +436,18 @@ class OpenMeteoSolarForecast:
 
                 # Add the damping factor to the efficiency
                 eff_damped = efficiency * damping_factors[i]
+                
+                # Check for horizon shading - if shaded, apply diffuse radiation
+                if horizon_shading[i]:
+                    irr_avg = d_avg
+                    irr_inst = d_inst
+                else:
+                    irr_avg = g_avg
+                    irr_inst = g_inst
 
                 # Calculate and store the power generated
-                w_avg[time_start] += gen_power(g_avg, temp_avg, eff_damped)
-                w_inst[time_start] += gen_power(g_inst, temp_inst, eff_damped)
+                w_avg[time_start] += gen_power(irr_avg, temp_avg, eff_damped)
+                w_inst[time_start] += gen_power(irr_inst, temp_inst, eff_damped)
 
         # Clamp the power generated to the AC power
         ac_wp = self.ac_kwp * 1000  # Convert kW to W
