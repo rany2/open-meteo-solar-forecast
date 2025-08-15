@@ -4,7 +4,6 @@ import asyncio
 import dataclasses  # noqa
 from datetime import timedelta
 from pprint import pprint  # noqa
-
 from open_meteo_solar_forecast import OpenMeteoSolarForecast
 
 
@@ -17,11 +16,13 @@ async def main() -> None:
         azimuth=15,
         dc_kwp=0.45,
         efficiency_factor=0.9,
+        use_horizon=True,
+        horizon_map=((0,7.2),(16,6.1),(19.6,4),(26.8,5.6),(45,9.8),(53.4,13.7),(102.7,19.8),(138.6,16.6),(145.1,12.7),(146.6,14.4),(191.9,20.8),(210.7,20.1),(209.9,32.1),(215.3,48.5),(219.6,52),(235.2,47),(249.3,40),(255.2,36),(265.1,28),(271.7,20),(277.7,18.4),(282.2,18),(288.8,13.4),(292.6,15.5),(300.7,17),(306,21.1),(310.2,21),(314.8,12.6),(325.6,10.7),(332.3,6.7),(334.9,7.1),(342.8,5.8),(360,7.2)), # tuple of 2-tuples
     ) as forecast:
         estimate = await forecast.estimate()
 
         # Uncomment this if you want to see what's in the estimate arrays
-        pprint(dataclasses.asdict(estimate))
+        #pprint(dataclasses.asdict(estimate))
         print()
         print(f"energy_production_today: {estimate.energy_production_today}")
         print(

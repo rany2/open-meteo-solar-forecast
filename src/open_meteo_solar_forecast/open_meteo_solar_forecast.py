@@ -46,6 +46,8 @@ class OpenMeteoSolarForecast:
     damping_morning: float | list[float] = 0.0
     damping_evening: float | list[float] = 0.0
     efficiency_factor: float | list[float] = 1.0
+    use_horizon: bool | list[bool] = False
+    horizon_map: tuple(tuple(float)) | list[tuple(tuple(float))] = ((0,0),(360,0))
 
     session: ClientSession | None = None
     _close_session: bool = False
@@ -102,6 +104,8 @@ class OpenMeteoSolarForecast:
         self.efficiency_factor = test_param_len("efficiency_factor", self.dc_kwp)
         self.damping_morning = test_param_len("damping_morning", self.dc_kwp)
         self.damping_evening = test_param_len("damping_evening", self.dc_kwp)
+        self.use_horizon = test_param_len("use_horizon", self.dc_kwp)
+        self.horizon_map = test_param_len("horizon_map", self.dc_kwp)
 
     async def _request(
         self,
@@ -313,6 +317,8 @@ class OpenMeteoSolarForecast:
             efficiency,
             damping_morning,
             damping_evening,
+            use_horizon,
+            horizon_map,
         ) in zip(
             self.azimuth,
             self.declination,
@@ -322,6 +328,8 @@ class OpenMeteoSolarForecast:
             self.efficiency_factor,
             self.damping_morning,
             self.damping_evening,
+            self.use_horizon,
+            self.horizon_map,
             strict=True,
         ):
             params = {
@@ -383,16 +391,17 @@ class OpenMeteoSolarForecast:
                 for t in time_arr
             ]
                      
-            # DUMMY HORIZON DATA - THIS HAST TO BE CONFIGURABLE VIA CONFIG
-            #horizon_map = [[0,0],[360,0]] # test horizon (0° altitude all around)            
-            #horizon_map = [[0,30],[360,30]] # test horizon (30° altitude all around)
-            horizon_map = [[0,7.2],[16,6.1],[19.6,4],[26.8,5.6],[45,9.8],[53.4,13.7],[102.7,19.8],[138.6,16.6],[145.1,12.7],[146.6,14.4],[191.9,20.8],[210.7,20.1],[209.9,32.1],[215.3,48.5],[219.6,57.7],[235.2,55],[249.3,51.7],[255.2,46.2],[265.1,38.7],[271.7,28.8],[277.7,18.4],[282.2,18],[288.8,13.4],[292.6,15.5],[300.7,17],[306,21.1],[310.2,21],[314.8,12.6],[325.6,10.7],[332.3,6.7],[334.9,7.1],[342.8,5.8],[360,7.2]] # my actual horizon map
-            
-            hmap_arr = numpy.array(horizon_map).T # convert list of tuples to numpy array
-            horizon_shading = [
-                check_horizon_shading(t,lonitude,latitude,hmap_arr)
-                for t in time_arr
-            ]
+            if use_horizon:
+                hmap_arr = numpy.array(horizon_map).T # convert list of tuples to numpy array
+                horizon_shading = [
+                    check_horizon_shading(t,lonitude,latitude,hmap_arr)
+                    for t in time_arr
+                ]
+            else:
+                horizon_shading = [
+                    False
+                    for t in time_arr
+                ]
 
             # Convert kW to W
             dc_wp = dc_kwp * 1000
