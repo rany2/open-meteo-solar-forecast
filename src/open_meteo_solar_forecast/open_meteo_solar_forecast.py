@@ -439,8 +439,8 @@ class OpenMeteoSolarForecast:
                 
                 # Check for horizon shading - if shaded, apply diffuse radiation
                 if horizon_shading[i]:
-                    irr_avg = d_avg
-                    irr_inst = d_inst
+                    irr_avg = 0.0 #d_avg
+                    irr_inst = 0.0 #d_inst
                 else:
                     irr_avg = g_avg
                     irr_inst = g_inst
