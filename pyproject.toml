@@ -1,14 +1,14 @@
 [tool.poetry]
 name = "open-meteo-solar-forecast"
-version = "0.1.22a"
+version = "0.1.22"
 description = "Asynchronous Python client for getting forecast solar information"
 authors = ["Rany <rany@riseup.net>", "Klaas Schoute <hello@student-techlife.com>"]
 maintainers = ["Rany <rany@riseup.net>"]
 license = "MIT"
 readme = "README.md"
-homepage = "https://github.com/thomay86/open-meteo-solar-forecast"
-repository = "https://github.com/thomay86/open-meteo-solar-forecast"
-documentation = "https://github.com/thomay86/open-meteo-solar-forecast"
+homepage = "https://github.com/rany2/open-meteo-solar-forecast"
+repository = "https://github.com/rany2/open-meteo-solar-forecast"
+documentation = "https://github.com/rany2/open-meteo-solar-forecast"
 keywords = ["forecast", "solar", "power", "energy", "api", "async", "client"]
 classifiers = [
     "Framework :: AsyncIO",
@@ -29,8 +29,8 @@ aiohttp = ">=3.0.0"
 python = "^3.11"
 
 [tool.poetry.urls]
-"Bug Tracker" = "https://github.com/thomay86/open-meteo-solar-forecast/issues"
-Changelog = "https://github.com/thomay86/open-meteo-solar-forecast/releases"
+"Bug Tracker" = "https://github.com/rany2/open-meteo-solar-forecast/issues"
+Changelog = "https://github.com/rany2/open-meteo-solar-forecast/releases"
 
 [tool.poetry.group.dev.dependencies]
 aresponses = "3.0.0"
