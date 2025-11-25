@@ -46,8 +46,8 @@ class OpenMeteoSolarForecast:
     damping_morning: float | list[float] = 0.0
     damping_evening: float | list[float] = 0.0
     efficiency_factor: float | list[float] = 1.0
-    use_horizon: bool | list[bool] = False
-    horizon_map: tuple(tuple(float)) | list[tuple(tuple(float))] = ((0,0),(360,0))
+    use_horizon: bool | list[bool] = True
+    horizon_map: tuple(tuple(float)) | list[tuple(tuple(float))] = ((0.0,20.0),(360.0,20.0))
 
     session: ClientSession | None = None
     _close_session: bool = False
