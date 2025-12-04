@@ -11,7 +11,8 @@ import pandas as pd
 
 async def main() -> None:
     
-    horizon_data = numpy.genfromtxt("horizon.txt", delimiter="\t", dtype=float)
+    #horizon_data = numpy.genfromtxt("horizon.txt", delimiter="\t", dtype=float)
+    horizon_data = numpy.genfromtxt("horizon_complex.txt", delimiter="\t", dtype=float)
     hm = tuple([tuple(row) for row in horizon_data])
     
     
@@ -83,11 +84,40 @@ async def main() -> None:
         estimate_shaded2_df = pd.DataFrame(estimate_shaded2.watts.items(), columns=['DateTime','partially shaded'])
         estimate_shaded2_df.set_index('DateTime', inplace=True)
         
-        fig, ax = plt.subplots()
+        estimate_period_unshaded_df = pd.DataFrame(estimate_unshaded.wh_period.items(), columns=['DateTime','unshaded'])
+        estimate_period_unshaded_df.set_index('DateTime', inplace=True)
+        
+        estimate_period_shaded_df = pd.DataFrame(estimate_shaded.wh_period.items(), columns=['DateTime','shaded'])
+        estimate_period_shaded_df.set_index('DateTime', inplace=True)
+        
+        estimate_period_shaded2_df = pd.DataFrame(estimate_shaded2.wh_period.items(), columns=['DateTime','partially shaded'])
+        estimate_period_shaded2_df.set_index('DateTime', inplace=True)
+        
+        estimate_daily_unshaded_df = pd.DataFrame(estimate_unshaded.wh_days.items(), columns=['DateTime','unshaded'])
+        estimate_daily_unshaded_df.set_index('DateTime', inplace=True)
+        
+        estimate_daily_shaded_df = pd.DataFrame(estimate_shaded.wh_days.items(), columns=['DateTime','shaded'])
+        estimate_daily_shaded_df.set_index('DateTime', inplace=True)
+        
+        estimate_daily_shaded2_df = pd.DataFrame(estimate_shaded2.wh_days.items(), columns=['DateTime','partially shaded'])
+        estimate_daily_shaded2_df.set_index('DateTime', inplace=True)
+        
         ax = estimate_unshaded_df.plot(label='unshaded',color='orange',linewidth=1)
         estimate_shaded_df.plot(ax=ax,label='shaded',color='grey',linewidth=1)
         estimate_shaded2_df.plot(ax=ax,label='partially shaded',color='black',linewidth=0.5)
         plt.ylabel('Module power / W')
+        plt.show()
+        
+        ax = estimate_period_unshaded_df.plot(label='unshaded',color='orange',linewidth=1)
+        estimate_period_shaded_df.plot(ax=ax,label='shaded',color='grey',linewidth=1)
+        estimate_period_shaded2_df.plot(ax=ax,label='partially shaded',color='black',linewidth=0.5)
+        plt.ylabel('Hourly energy / Wh')
+        plt.show()
+        
+        ax = estimate_daily_unshaded_df.plot.bar(label='unshaded',color='orange',linewidth=1)
+        estimate_daily_shaded_df.plot.bar(ax=ax,label='shaded',color='grey',linewidth=1)
+        estimate_daily_shaded2_df.plot.bar(ax=ax,label='partially shaded',color='black',linewidth=0.5)
+        plt.ylabel('Daily energy / Wh')
         plt.show()
 
 if __name__ == "__main__":
