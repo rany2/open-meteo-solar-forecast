@@ -477,6 +477,8 @@ class OpenMeteoSolarForecast:
                 # On a sunny day (low f), there are 'hard' shadows resulting in the bypass diodes shutting of the module almost completely
                 # On a cloudy day (high f), no 'hard' shadows are present and the module operates at pure diffuse power
                 # In between, partial shading effect is assumed to be directly dependent on f
+                # inspired by https://pvlib-python.readthedocs.io/en/stable/gallery/shading/plot_partial_module_shading_simple.html#calculating-shading-loss-across-shading-scenarios
+                
                 if horizon_shading[i]:
                     irr_avg = d_avg * f_avg
                     irr_inst = d_inst * f_inst
