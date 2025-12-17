@@ -36,8 +36,8 @@ class OpenMeteoSolarForecast:
     latitude: float | list[float]
     longitude: float | list[float]
 
-    past_days: int | list[int] = 92
-    forecast_days: int | list[int] = 16
+    past_days: int = 92
+    forecast_days: int = 16
 
     ac_kwp: float | None = None
     api_key: str | None = None
