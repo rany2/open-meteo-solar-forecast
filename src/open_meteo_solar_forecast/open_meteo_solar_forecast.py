@@ -47,6 +47,7 @@ class OpenMeteoSolarForecast:
     damping_evening: float | list[float] = 0.0
     efficiency_factor: float | list[float] = 1.0
     use_horizon: bool | list[bool] = False
+    partial_shading: bool | list[bool] = False
     horizon_map: tuple(tuple(float)) | list[tuple(tuple(float))] = ((0.0,20.0),(360.0,20.0))
 
     session: ClientSession | None = None
@@ -105,6 +106,7 @@ class OpenMeteoSolarForecast:
         self.damping_morning = test_param_len("damping_morning", self.dc_kwp)
         self.damping_evening = test_param_len("damping_evening", self.dc_kwp)
         self.use_horizon = test_param_len("use_horizon", self.dc_kwp)
+        self.partial_shading = test_param_len("partial_shading", self.dc_kwp)
         self.horizon_map = test_param_len("horizon_map", self.dc_kwp)
 
     async def _request(
@@ -318,6 +320,7 @@ class OpenMeteoSolarForecast:
             damping_morning,
             damping_evening,
             use_horizon,
+            partial_shading,
             horizon_map,
         ) in zip(
             self.azimuth,
@@ -329,16 +332,26 @@ class OpenMeteoSolarForecast:
             self.damping_morning,
             self.damping_evening,
             self.use_horizon,
+            self.partial_shading,
             self.horizon_map,
             strict=True,
         ):
+            '''
+            sorting out the confusing acronyms...
+            
+            diffuse (horizontal) irr. (DHI): contribution of diffuse (scattered) sunlight [independent of tilt]
+            direct irr.: contribution of direct beam sunlight (on a horizontal plane?)
+            direct normal irr. (DNI): intensity of direct sunlight on a plane perpendicular to the beam
+            global horizontal irr. (GHI): sum of diffuse and direct sunlight collected on a horizontal plane (tilt = 0°)
+            global tilted irr. (GTI): sum of diffuse and direct sunlight collected on a tilted plane
+            '''
             params = {
                 "latitude": str(latitude),
                 "longitude": str(lonitude),
                 "azimuth": str(azimuth),
                 "tilt": str(declination),
                 "minutely_15": "temperature_2m"
-                ",global_tilted_irradiance,global_tilted_irradiance_instant,diffuse_radiation,diffuse_radiation_instant",
+                ",global_tilted_irradiance,global_tilted_irradiance_instant,diffuse_radiation,diffuse_radiation_instant,direct_radiation,direct_radiation_instant",
                 "daily": "sunrise,sunset",
                 "forecast_days": str(self.forecast_days),
                 "past_days": str(self.past_days),
@@ -353,6 +366,8 @@ class OpenMeteoSolarForecast:
             gti_inst_arr = data["minutely_15"]["global_tilted_irradiance_instant"]
             dhi_avg_arr = data["minutely_15"]["diffuse_radiation"]
             dhi_inst_arr = data["minutely_15"]["diffuse_radiation_instant"]
+            dr_avg_arr = data["minutely_15"]["direct_radiation"]
+            dr_inst_arr = data["minutely_15"]["direct_radiation_instant"]
             temp_arr = data["minutely_15"]["temperature_2m"]
             if utc_offset is None:
                 utc_offset = data["utc_offset_seconds"]
@@ -425,6 +440,26 @@ class OpenMeteoSolarForecast:
                 g_inst = gti_inst_arr[i]
                 d_avg = dhi_avg_arr[i]
                 d_inst = dhi_inst_arr[i]
+                dr_avg = dr_avg_arr[i]
+                dr_inst = dr_inst_arr[i]
+                
+                # Calculate diffuse contribution (only if partial_shading enabled)
+                # prefer this over simple ratio d/dr, because this may turn 0 unexpectedly in morning/evening conditions, when dr = 0 
+                # clamp to minimum 0 for possible implausible sets
+                if use_horizon and partial_shading:
+                    if (d_avg + dr_avg) > 0:
+                        f_avg = max(d_avg/(d_avg + dr_avg) , 0.0)
+                    else:
+                        f_avg = 1.0
+                        
+                    if (d_inst + dr_inst) > 0:
+                        f_inst = max(d_inst/(d_inst + dr_inst) , 0.0)
+                    else:
+                        f_inst = 1.0
+                else:
+                    f_avg = 1.0
+                    f_inst = 1.0
+                    
 
                 # Get the temperature for average and instantaneous values
                 temp_avg = (temp_arr[i] + temp_arr[i - 1]) / 2
@@ -437,10 +472,16 @@ class OpenMeteoSolarForecast:
                 # Add the damping factor to the efficiency
                 eff_damped = efficiency * damping_factors[i]
                 
-                # Check for horizon shading - if shaded, apply diffuse radiation
+                # Check for horizon shading - if shaded, apply diffuse radiation and optionally diffuse/direct factor
+                # --- experimental empiric partial shading approach ---
+                # On a sunny day (low f), there are 'hard' shadows resulting in the bypass diodes shutting of the module almost completely
+                # On a cloudy day (high f), no 'hard' shadows are present and the module operates at pure diffuse power
+                # In between, partial shading effect is assumed to be directly dependent on f
+                # inspired by https://pvlib-python.readthedocs.io/en/stable/gallery/shading/plot_partial_module_shading_simple.html#calculating-shading-loss-across-shading-scenarios
+                
                 if horizon_shading[i]:
-                    irr_avg = d_avg
-                    irr_inst = d_inst
+                    irr_avg = d_avg * f_avg
+                    irr_inst = d_inst * f_inst
                 else:
                     irr_avg = g_avg
                     irr_inst = g_inst

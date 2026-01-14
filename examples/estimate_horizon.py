@@ -21,6 +21,7 @@ async def main() -> None:
         dc_kwp=0.45,
         efficiency_factor=0.9,
         use_horizon=True,
+        partial_shading=True,
         horizon_map=hm, # tuple of 2-tuples
     ) as forecast:
         estimate = await forecast.estimate()
