@@ -60,54 +60,72 @@ class OpenMeteoSolarForecast:
         if self.ac_kwp is None:
             self.ac_kwp = float("inf")
 
-        # Validate list parameters
-        if list in map(
-            type,
-            (
-                self.azimuth,
-                self.declination,
-                self.dc_kwp,
-                self.latitude,
-                self.longitude,
-            ),
-        ):
-            if not all(
-                isinstance(param, list) and len(param) == len(self.dc_kwp)
-                for param in (
-                    self.azimuth,
-                    self.declination,
-                    self.dc_kwp,
-                    self.latitude,
-                    self.longitude,
-                )
-            ):
-                raise OpenMeteoSolarForecastConfigError(
-                    "The parameters must be of the same length"
-                )
-        else:
-            self.azimuth = [self.azimuth]
-            self.declination = [self.declination]
-            self.dc_kwp = [self.dc_kwp]
-            self.latitude = [self.latitude]
-            self.longitude = [self.longitude]
+        def is_list_like(value: Any, *, tuple_as_list: bool = True) -> bool:
+            """Check if value should be interpreted as a list of per-array values."""
+            if isinstance(value, list):
+                return True
+            return tuple_as_list and isinstance(value, tuple)
 
-        def test_param_len(attr_name: str, other_attr: list[Any]) -> list[Any]:
+        def normalize_required(attr_name: str, target_len: int) -> list[Any]:
+            """Normalize required parameters to a list of per-array values."""
+            attr = getattr(self, attr_name)
+            if is_list_like(attr):
+                attr_list = list(attr)
+                if len(attr_list) == target_len:
+                    return attr_list
+                if len(attr_list) == 1:
+                    return attr_list * target_len
+                msg = f"{attr_name} must be length 1 or match other array parameters"
+                raise OpenMeteoSolarForecastConfigError(msg)
+
+            return [attr] * target_len
+
+        required_attr_names = (
+            "azimuth",
+            "declination",
+            "dc_kwp",
+            "latitude",
+            "longitude",
+        )
+        required_values = [getattr(self, attr_name) for attr_name in required_attr_names]
+        target_len = max(
+            len(value) if is_list_like(value) else 1 for value in required_values
+        )
+
+        self.azimuth = normalize_required("azimuth", target_len)
+        self.declination = normalize_required("declination", target_len)
+        self.dc_kwp = normalize_required("dc_kwp", target_len)
+        self.latitude = normalize_required("latitude", target_len)
+        self.longitude = normalize_required("longitude", target_len)
+
+        def test_param_len(
+            attr_name: str,
+            other_attr: list[Any],
+            *,
+            tuple_as_list: bool = True,
+        ) -> list[Any]:
             """Validate the length of a param and return a list of the same length."""
             attr = getattr(self, attr_name)
-            if isinstance(attr, list):
-                if len(attr) != len(other_attr):
+            if is_list_like(attr, tuple_as_list=tuple_as_list):
+                attr_list = list(attr)
+                if len(attr_list) == len(other_attr):
+                    return attr_list
+                if len(attr_list) == 1:
+                    return attr_list * len(other_attr)
+                if len(attr_list) != len(other_attr):
                     msg = f"{attr_name} must be the same length as the other parameters"
                     raise OpenMeteoSolarForecastConfigError(msg)
-            else:
-                attr = [attr] * len(other_attr)
-            return attr
+
+            return [attr] * len(other_attr)
 
         self.efficiency_factor = test_param_len("efficiency_factor", self.dc_kwp)
         self.damping_morning = test_param_len("damping_morning", self.dc_kwp)
         self.damping_evening = test_param_len("damping_evening", self.dc_kwp)
         self.use_horizon = test_param_len("use_horizon", self.dc_kwp)
         self.partial_shading = test_param_len("partial_shading", self.dc_kwp)
-        self.horizon_map = test_param_len("horizon_map", self.dc_kwp)
+        self.horizon_map = test_param_len(
+            "horizon_map", self.dc_kwp, tuple_as_list=False
+        )
 
     async def _request(
         self,

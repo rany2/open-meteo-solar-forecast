@@ -81,12 +81,39 @@ if __name__ == "__main__":
 | --------- | ---------- | ----------- |
 | `base_url` | `str` | The base URL of the API (optional) |
 | `api_key` | `str` | Your API key (optional) |
-| `declination` | `int` | The tilt of the solar panels (required) |
-| `azimuth` | `int` | The direction the solar panels are facing (required) |
-| `dc_kwp` | `float` | The size of the solar panels in kWp (required) |
-| `use_horizon` | `bool` | Whether to use horizon shading (optional, default = False) |
-| `partial_shading` | `bool` | Whether to use interpret horizon shading as partial** [experimental] (optional, default = False) |
-| `horizon_map` | `tuple of 2-tuples` | Map of the horizon* (required if use_horizon = True) |
+| `declination` | `int \| list[int] \| tuple[int, ...]` | The tilt of the solar panels (required) |
+| `azimuth` | `int \| list[int] \| tuple[int, ...]` | The direction the solar panels are facing (required) |
+| `dc_kwp` | `float \| list[float] \| tuple[float, ...]` | The size of the solar panels in kWp (required) |
+| `use_horizon` | `bool \| list[bool] \| tuple[bool, ...]` | Whether to use horizon shading (optional, default = False) |
+| `partial_shading` | `bool \| list[bool] \| tuple[bool, ...]` | Whether to use interpret horizon shading as partial** [experimental] (optional, default = False) |
+| `horizon_map` | `tuple of 2-tuples \| list[tuple of 2-tuples]` | Map of the horizon* (required if use_horizon = True) |
+
+### Multiple PV arrays
+
+To calculate a combined forecast from multiple arrays, pass per-array values as
+lists or tuples for the required parameters (`latitude`, `longitude`,
+`declination`, `azimuth`, and `dc_kwp`).
+
+```python
+async with OpenMeteoSolarForecast(
+    latitude=[52.16, 52.16],
+    longitude=[4.47, 4.47],
+    declination=[20, 35],
+    azimuth=[90, 270],
+    dc_kwp=[2.4, 1.8],
+    # Optional per-array values can also be lists/tuples
+    efficiency_factor=[0.95, 0.97],
+    use_horizon=[False, True],
+    horizon_map=[
+        ((0, 0), (360, 0)),
+        ((0, 20), (180, 10), (360, 20)),
+    ],
+) as forecast:
+    estimate = await forecast.estimate()
+```
+
+Scalar values are still supported and are automatically applied to all arrays
+when mixed with list/tuple inputs.
 
 *) The horizon map is a tuple of 2-tuples, where each 2-tuple consists of (azimuth,elevation). Azimuth is the compass direction in degrees (0° = north, 180° = south). The horizon map has to cover the whole range of azimuths that the sun travels through over the year (recommendation: plot the horizon from 0 to 360°). Elevation is the associated angle in degrees of any object (hill, tree, ...) casting a shadow on the modules. The elevation angle has to be in the range 0° (flat, ideal horizon) to 90° (in the sky directly over the modules). The map has to be monotonic on the azimuth axis, however this is not checked by the script! Elevation values in between are interpolated along the azimuth axis, thus non-monotonic values will give wrong results. The horizon map can also be passed from a text file, see the included example estimate_horizon.py.
 
