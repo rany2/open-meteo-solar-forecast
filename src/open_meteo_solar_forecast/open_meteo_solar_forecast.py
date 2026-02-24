@@ -49,7 +49,7 @@ class OpenMeteoSolarForecast:
     use_horizon: bool | list[bool] = False
     partial_shading: bool | list[bool] = False
     horizon_map: tuple(tuple(float)) | list[tuple(tuple(float))] = ((0.0,20.0),(360.0,20.0))
-    max_snowcover_depth: float | list[float] = 0.0
+    max_snowcover_depth_cm: float | list[float] = 0.0
 
     session: ClientSession | None = None
     _close_session: bool = False
@@ -127,7 +127,7 @@ class OpenMeteoSolarForecast:
         self.horizon_map = test_param_len(
             "horizon_map", self.dc_kwp, tuple_as_list=False
         )
-        self.max_snowcover_depth = test_param_len("max_snowcover_depth", self.dc_kwp)
+        self.max_snowcover_depth_cm = test_param_len("max_snowcover_depth_cm", self.dc_kwp)
 
     async def _request(
         self,
@@ -342,7 +342,7 @@ class OpenMeteoSolarForecast:
             use_horizon,
             partial_shading,
             horizon_map,
-            max_snowcover_depth,
+            max_snowcover_depth_cm,
         ) in zip(
             self.azimuth,
             self.declination,
@@ -355,7 +355,7 @@ class OpenMeteoSolarForecast:
             self.use_horizon,
             self.partial_shading,
             self.horizon_map,
-            self.max_snowcover_depth,
+            self.max_snowcover_depth_cm,
             strict=True,
         ):
             '''
@@ -509,10 +509,10 @@ class OpenMeteoSolarForecast:
                     irr_avg = g_avg
                     irr_inst = g_inst
                     
-                # Apply snow coverage as linear regression from 0 (panels not covered) to max_snowcover_depth (in cm, panels producing 0 W)
+                # Apply snow coverage as linear regression from 0 (panels not covered) to max_snowcover_depth_cm (in cm, panels producing 0 W)
                 # multiply snow_depth by 100 (m to cm) - clamp to 0...1 interval
-                if max_snowcover_depth > 0:
-                    snowcover_factor =1.0 - min( (snow_depth_arr [i]*100)/max_snowcover_depth , 1.0)
+                if max_snowcover_depth_cm > 0:
+                    snowcover_factor =1.0 - min( (snow_depth_arr [i]*100)/max_snowcover_depth_cm , 1.0)
                     irr_avg *= snowcover_factor
                     irr_inst *= snowcover_factor
 
