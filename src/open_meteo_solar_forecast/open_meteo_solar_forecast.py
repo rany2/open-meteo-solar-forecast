@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime as dt
 from datetime import timedelta, timezone
@@ -24,6 +25,13 @@ from .exceptions import (
     OpenMeteoSolarForecastRequestError,
 )
 from .models import Estimate
+
+
+def _quarter_hour_energy(
+    average_power: Mapping[dt, int | float],
+) -> dict[dt, float]:
+    """Convert PT15M average power to energy for each exact interval."""
+    return {timestamp: power * 0.25 for timestamp, power in average_power.items()}
 
 
 @dataclass
@@ -515,6 +523,10 @@ class OpenMeteoSolarForecast:
         for time in w_inst:
             w_inst[time] = min(w_inst[time], ac_wp)
 
+        # Convert already-combined and inverter-clipped average power to exact
+        # energy for each half-open interval [time, time + 15 minutes).
+        wh_period_15m = _quarter_hour_energy(w_avg)
+
         # Calculate the average power generated per hour
         wh_period: dict[dt, int] = {}
         wh_period_count: dict[dt, int] = {}
@@ -536,6 +548,7 @@ class OpenMeteoSolarForecast:
             wh_period=wh_period,
             wh_days=wh_days,
             api_timezone=tz,
+            wh_period_15m=wh_period_15m,
         )
 
     async def close(self) -> None:
