@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 def _timed_value(at: dt.datetime, data: dict[dt.datetime, int]) -> int | None:
@@ -76,6 +76,7 @@ class Estimate:
         watts: Estimated solar power output per time period.
         wh_period: Estimated solar energy production differences per hour.
         wh_days: Estimated solar energy production per day.
+        wh_period_15m: Estimated solar energy production per 15-minute interval.
 
     """
 
@@ -83,6 +84,7 @@ class Estimate:
     wh_period: dict[dt.datetime, int]
     wh_days: dict[dt.datetime, int]
     api_timezone: dt.timezone
+    wh_period_15m: dict[dt.datetime, float] = field(default_factory=dict)
 
     @property
     def timezone(self) -> timezone:

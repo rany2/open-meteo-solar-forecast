@@ -26,6 +26,11 @@ This library returns a lot of different data, based on the API:
 - Estimated Energy Production - This Hour (kWh)
 - Estimated Energy Production - Next Hour (kWh)
 - Estimated Energy Production - Remaining today (kWh)
+- `Estimate.wh_period_15m`: exact modeled energy in Wh for each 15-minute
+  interval, keyed by its timezone-aware interval-start timestamp. It is derived
+  from the interval-average modeled power after array combination and inverter
+  clipping. `Estimate.watts` is instantaneous modeled power and is not an
+  equivalent source for interval energy.
 
 ### Power
 
