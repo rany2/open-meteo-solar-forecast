@@ -15,6 +15,7 @@ async def main() -> None:
     horizon_data = numpy.genfromtxt("horizon_complex.txt", delimiter="\t", dtype=float)
     hm = tuple([tuple(row) for row in horizon_data])
     
+    max_snowcover_depth_cm = 5 # cm
     
     latitude=51.4
     longitude=11.9
@@ -36,6 +37,7 @@ async def main() -> None:
         use_horizon=False,
         horizon_map=hm, # tuple of 2-tuples
         partial_shading=False,
+        max_snowcover_depth_cm=max_snowcover_depth_cm,
         past_days=past_days,
         forecast_days=forecast_days,
     ) as forecast:
@@ -51,6 +53,7 @@ async def main() -> None:
         use_horizon=True,
         horizon_map=hm, # tuple of 2-tuples
         partial_shading=False,
+        max_snowcover_depth_cm=max_snowcover_depth_cm,
         past_days=past_days,
         forecast_days=forecast_days,
     ) as forecast2:
@@ -66,6 +69,7 @@ async def main() -> None:
         use_horizon=True,
         horizon_map=hm, # tuple of 2-tuples
         partial_shading=True,
+        max_snowcover_depth_cm=max_snowcover_depth_cm,
         past_days=past_days,
         forecast_days=forecast_days,
     ) as forecast3:

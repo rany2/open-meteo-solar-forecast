@@ -57,6 +57,7 @@ class OpenMeteoSolarForecast:
     use_horizon: bool | list[bool] = False
     partial_shading: bool | list[bool] = False
     horizon_map: tuple(tuple(float)) | list[tuple(tuple(float))] = ((0.0,20.0),(360.0,20.0))
+    max_snowcover_depth_cm: float | list[float] = 0.0
 
     session: ClientSession | None = None
     _close_session: bool = False
@@ -134,6 +135,7 @@ class OpenMeteoSolarForecast:
         self.horizon_map = test_param_len(
             "horizon_map", self.dc_kwp, tuple_as_list=False
         )
+        self.max_snowcover_depth_cm = test_param_len("max_snowcover_depth_cm", self.dc_kwp)
 
     async def _request(
         self,
@@ -348,6 +350,7 @@ class OpenMeteoSolarForecast:
             use_horizon,
             partial_shading,
             horizon_map,
+            max_snowcover_depth_cm,
         ) in zip(
             self.azimuth,
             self.declination,
@@ -360,6 +363,7 @@ class OpenMeteoSolarForecast:
             self.use_horizon,
             self.partial_shading,
             self.horizon_map,
+            self.max_snowcover_depth_cm,
             strict=True,
         ):
             '''
@@ -377,7 +381,7 @@ class OpenMeteoSolarForecast:
                 "azimuth": str(azimuth),
                 "tilt": str(declination),
                 "minutely_15": "temperature_2m"
-                ",global_tilted_irradiance,global_tilted_irradiance_instant,diffuse_radiation,diffuse_radiation_instant,direct_radiation,direct_radiation_instant",
+                ",global_tilted_irradiance,global_tilted_irradiance_instant,diffuse_radiation,diffuse_radiation_instant,direct_radiation,direct_radiation_instant,snow_depth",
                 "daily": "sunrise,sunset",
                 "forecast_days": str(self.forecast_days),
                 "past_days": str(self.past_days),
@@ -394,7 +398,8 @@ class OpenMeteoSolarForecast:
             dhi_inst_arr = data["minutely_15"]["diffuse_radiation_instant"]
             dr_avg_arr = data["minutely_15"]["direct_radiation"]
             dr_inst_arr = data["minutely_15"]["direct_radiation_instant"]
-            temp_arr = data["minutely_15"]["temperature_2m"]
+            snow_depth_arr = data["minutely_15"]["snow_depth"]
+            temp_arr = data["minutely_15"]["temperature_2m"]            
             if utc_offset is None:
                 utc_offset = data["utc_offset_seconds"]
             elif utc_offset != data["utc_offset_seconds"]:
@@ -443,7 +448,7 @@ class OpenMeteoSolarForecast:
                     False
                     for t in time_arr
                 ]
-
+            
             # Convert kW to W
             dc_wp = dc_kwp * 1000
 
@@ -511,6 +516,13 @@ class OpenMeteoSolarForecast:
                 else:
                     irr_avg = g_avg
                     irr_inst = g_inst
+                    
+                # Apply snow coverage as linear regression from 0 (panels not covered) to max_snowcover_depth_cm (in cm, panels producing 0 W)
+                # multiply snow_depth by 100 (m to cm) - clamp to 0...1 interval
+                if max_snowcover_depth_cm > 0:
+                    snowcover_factor =1.0 - min( (snow_depth_arr [i]*100)/max_snowcover_depth_cm , 1.0)
+                    irr_avg *= snowcover_factor
+                    irr_inst *= snowcover_factor
 
                 # Calculate and store the power generated
                 w_avg[time_start] += gen_power(irr_avg, temp_avg, eff_damped)

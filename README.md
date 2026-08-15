@@ -73,6 +73,7 @@ async def main() -> None:
 		use_horizon=True,
 		partial_shading=True,
         horizon_map=((0,30),(360,30),
+		max_snowcover_depth_cm=5.0,
     ) as forecast:
         estimate = await forecast.estimate()
         print(estimate)
@@ -90,8 +91,9 @@ if __name__ == "__main__":
 | `azimuth` | `int \| list[int] \| tuple[int, ...]` | The direction the solar panels are facing (required) |
 | `dc_kwp` | `float \| list[float] \| tuple[float, ...]` | The size of the solar panels in kWp (required) |
 | `use_horizon` | `bool \| list[bool] \| tuple[bool, ...]` | Whether to use horizon shading (optional, default = False) |
-| `partial_shading` | `bool \| list[bool] \| tuple[bool, ...]` | Whether to use interpret horizon shading as partial** [experimental] (optional, default = False) |
+| `partial_shading` | `bool \| list[bool] \| tuple[bool, ...]` | Whether to use interpret horizon shading as partial [experimental] (optional, default = False) |
 | `horizon_map` | `tuple of 2-tuples \| list[tuple of 2-tuples]` | Map of the horizon* (required if use_horizon = True) |
+| `max_snowcover_depth_cm` | `float \| list[float] \| tuple[float, ...]` | Critical snow coverage (cm) resulting in zero panel power [experimental] (required, default = 0.0 turns this off) |
 
 ### Multiple PV arrays
 
@@ -112,6 +114,7 @@ async with OpenMeteoSolarForecast(
     horizon_map=[
         ((0, 0), (360, 0)),
         ((0, 20), (180, 10), (360, 20)),
+    max_snowcover_depth_cm=[5.0,5.0],
     ],
 ) as forecast:
     estimate = await forecast.estimate()
@@ -120,9 +123,11 @@ async with OpenMeteoSolarForecast(
 Scalar values are still supported and are automatically applied to all arrays
 when mixed with list/tuple inputs.
 
-*) The horizon map is a tuple of 2-tuples, where each 2-tuple consists of (azimuth,elevation). Azimuth is the compass direction in degrees (0° = north, 180° = south). The horizon map has to cover the whole range of azimuths that the sun travels through over the year (recommendation: plot the horizon from 0 to 360°). Elevation is the associated angle in degrees of any object (hill, tree, ...) casting a shadow on the modules. The elevation angle has to be in the range 0° (flat, ideal horizon) to 90° (in the sky directly over the modules). The map has to be monotonic on the azimuth axis, however this is not checked by the script! Elevation values in between are interpolated along the azimuth axis, thus non-monotonic values will give wrong results. The horizon map can also be passed from a text file, see the included example estimate_horizon.py.
+The **horizon map** is a tuple of 2-tuples, where each 2-tuple consists of (azimuth,elevation). Azimuth is the compass direction in degrees (0° = north, 180° = south). The horizon map has to cover the whole range of azimuths that the sun travels through over the year (recommendation: plot the horizon from 0 to 360°). Elevation is the associated angle in degrees of any object (hill, tree, ...) casting a shadow on the modules. The elevation angle has to be in the range 0° (flat, ideal horizon) to 90° (in the sky directly over the modules). The map has to be monotonic on the azimuth axis, however this is not checked by the script! Elevation values in between are interpolated along the azimuth axis, thus non-monotonic values will give wrong results. The horizon map can also be passed from a text file, see the included example estimate_horizon.py.
 
-**) If partial_shading is disabled and a shadow is detected on the module, only the diffuse irradiation will be used to calculate the power output. This is useful if the shading is predominantly from far-away objects, which can be treated as shading the whole module at once or not. If partial_shading is enabled and a shadow is detected on the module, the shadow is treated as partial. This is useful if the shading arises from close-by objects, which cast 'hard' contoured shadows on the module. In this case, an experimental calculation is used taking into account the 'sunniness' of the conditions. This is done via the ratio of diffuse and direct irradiation. A large share of diffuse irradiation (cloudy day) will let the module run as homogeneously shaded at diffuse power. A small share of diffuse irradiation (sunny) day will reduce the diffuse power even more, since hard partial shadows can shut down the module completely.
+If **partial_shading** is disabled and a shadow is detected on the module, only the diffuse irradiation will be used to calculate the power output. This is useful if the shading is predominantly from far-away objects, which can be treated as shading the whole module at once or not. If partial_shading is enabled and a shadow is detected on the module, the shadow is treated as partial. This is useful if the shading arises from close-by objects, which cast 'hard' contoured shadows on the module. In this case, an experimental calculation is used taking into account the 'sunniness' of the conditions. This is done via the ratio of diffuse and direct irradiation. A large share of diffuse irradiation (cloudy day) will let the module run as homogeneously shaded at diffuse power. A small share of diffuse irradiation (sunny) day will reduce the diffuse power even more, since hard partial shadows can shut down the module completely.
+
+If **max_snowcover_depth_cm** is set to a value > 0, this value will be interpreted as the snow cover depth (in centimeters) that results in zero power from the module. In between, a linear interpolation over the forecast snow cover depth is applied. (A value of 0 turns this feature completely off.)
 
 ## Contributing
 
