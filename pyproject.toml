@@ -1,47 +1,49 @@
-[tool.poetry]
+[project]
 name = "open-meteo-solar-forecast"
 version = "0.1.29"
 description = "Asynchronous Python client for getting forecast solar information"
-authors = ["Rany <rany@riseup.net>", "Klaas Schoute <hello@student-techlife.com>"]
-maintainers = ["Rany <rany@riseup.net>"]
+authors = [
+    { name = "Rany", email = "rany@riseup.net" },
+    { name = "Klaas Schoute", email = "hello@student-techlife.com" },
+]
+maintainers = [{ name = "Rany", email = "rany@riseup.net" }]
 license = "MIT"
+license-files = ["LICENSE"]
 readme = "README.md"
-homepage = "https://github.com/rany2/open-meteo-solar-forecast"
-repository = "https://github.com/rany2/open-meteo-solar-forecast"
-documentation = "https://github.com/rany2/open-meteo-solar-forecast"
+requires-python = ">=3.11"
 keywords = ["forecast", "solar", "power", "energy", "api", "async", "client"]
 classifiers = [
     "Framework :: AsyncIO",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Natural Language :: English",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3",
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
-packages = [
-    { include = "open_meteo_solar_forecast", from = "src" },
+dependencies = [
+    "aiohttp>=3.0.0,<4.0.0",
+    "suncalc>=0.1.0,<0.2.0",
+    "numpy>=1.26.0,<3.0.0",
+    "pytz>=2024.1",
 ]
 
-[tool.poetry.dependencies]
-aiohttp = "^3.0.0"
-python = "^3.11"
-suncalc = "^0.1.0"
-numpy = ">=1.26.0,<3.0.0"
-pytz = ">=2024.1"
-
-[tool.poetry.urls]
+[project.urls]
+Homepage = "https://github.com/rany2/open-meteo-solar-forecast"
+Repository = "https://github.com/rany2/open-meteo-solar-forecast"
+Documentation = "https://github.com/rany2/open-meteo-solar-forecast"
 "Bug Tracker" = "https://github.com/rany2/open-meteo-solar-forecast/issues"
 Changelog = "https://github.com/rany2/open-meteo-solar-forecast/releases"
 
-[tool.poetry.group.dev.dependencies]
-aresponses = "3.0.0"
-covdefaults = "2.3.0"
-mypy = "1.10.0"
-ruff = "0.4.2"
-syrupy = "4.6.1"
-yamllint = "1.35.1"
+[dependency-groups]
+dev = [
+    "aresponses==3.0.0",
+    "covdefaults==2.3.0",
+    "mypy==1.10.0",
+    "ruff==0.4.2",
+    "syrupy==4.6.1",
+    "yamllint==1.35.1",
+]
 
 [tool.mypy]
 # Specify the target platform details in config, so your developers are
@@ -104,5 +106,5 @@ known-first-party = ["open_meteo_solar_forecast"]
 max-complexity = 25
 
 [build-system]
-build-backend = "poetry.core.masonry.api"
-requires = ["poetry-core>=1.0.0"]
+requires = ["uv_build>=0.11.0,<0.12.0"]
+build-backend = "uv_build"

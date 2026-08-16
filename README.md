@@ -137,26 +137,24 @@ Thank you for being involved! :heart_eyes:
 
 ## Setting up development environment
 
-This Python project relies on [Poetry][poetry] as its dependency manager,
-providing comprehensive management and control over project dependencies.
+This Python project uses [uv][uv] as its dependency manager.
 
 You need at least:
 
 - Python 3.11+
-- [Poetry][poetry-install]
+- [uv][uv-install]
 
 Install all packages, including all development requirements:
 
 ```bash
-poetry install
+uv sync
 ```
 
-Poetry creates by default an virtual environment where it installs all
-necessary pip packages, to enter or exit the venv run the following commands:
+uv creates a virtual environment in `.venv` where it installs all
+necessary packages. Run commands inside it with:
 
 ```bash
-poetry shell
-exit
+uv run python
 ```
 
 ## License
@@ -184,5 +182,5 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-[poetry-install]: https://python-poetry.org/docs/#installation
-[poetry]: https://python-poetry.org
+[uv-install]: https://docs.astral.sh/uv/getting-started/installation/
+[uv]: https://docs.astral.sh/uv/
