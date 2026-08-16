@@ -54,6 +54,7 @@ class OpenMeteoSolarForecast:
     damping_morning: float | list[float] = 0.0
     damping_evening: float | list[float] = 0.0
     efficiency_factor: float | list[float] = 1.0
+    tracking: str | list[str] = "none"
     use_horizon: bool | list[bool] = False
     partial_shading: bool | list[bool] = False
     horizon_map: tuple(tuple(float)) | list[tuple(tuple(float))] = ((0.0,20.0),(360.0,20.0))
@@ -102,6 +103,16 @@ class OpenMeteoSolarForecast:
         )
 
         self.azimuth = normalize_required("azimuth", target_len)
+        for azimuth in self.azimuth:
+            if not -180 <= azimuth <= 180:
+                msg = (
+                    f"azimuth {azimuth} is out of range [-180, 180]. "
+                    "Azimuth uses the Open-Meteo convention: "
+                    "0 = South, -90 = East, 90 = West, +-180 = North. "
+                    "To convert a compass bearing (0 = North, 90 = East, "
+                    "180 = South, 270 = West), subtract 180."
+                )
+                raise OpenMeteoSolarForecastConfigError(msg)
         self.declination = normalize_required("declination", target_len)
         self.dc_kwp = normalize_required("dc_kwp", target_len)
         self.latitude = normalize_required("latitude", target_len)
@@ -128,6 +139,12 @@ class OpenMeteoSolarForecast:
             return [attr] * len(other_attr)
 
         self.efficiency_factor = test_param_len("efficiency_factor", self.dc_kwp)
+        self.tracking = test_param_len("tracking", self.dc_kwp)
+        valid_tracking = {"none", "azimuth", "tilt", "dual"}
+        for tracking in self.tracking:
+            if tracking not in valid_tracking:
+                msg = f"tracking must be one of {sorted(valid_tracking)}, got {tracking!r}"
+                raise OpenMeteoSolarForecastConfigError(msg)
         self.damping_morning = test_param_len("damping_morning", self.dc_kwp)
         self.damping_evening = test_param_len("damping_evening", self.dc_kwp)
         self.use_horizon = test_param_len("use_horizon", self.dc_kwp)
@@ -345,6 +362,7 @@ class OpenMeteoSolarForecast:
             latitude,
             lonitude,
             efficiency,
+            tracking,
             damping_morning,
             damping_evening,
             use_horizon,
@@ -358,6 +376,7 @@ class OpenMeteoSolarForecast:
             self.latitude,
             self.longitude,
             self.efficiency_factor,
+            self.tracking,
             self.damping_morning,
             self.damping_evening,
             self.use_horizon,
@@ -375,11 +394,13 @@ class OpenMeteoSolarForecast:
             global horizontal irr. (GHI): sum of diffuse and direct sunlight collected on a horizontal plane (tilt = 0°)
             global tilted irr. (GTI): sum of diffuse and direct sunlight collected on a tilted plane
             '''
+            # The API interprets "nan" as a tracked axis: azimuth=nan is a
+            # vertical-axis (east-west) tracker, tilt=nan a tilt-axis tracker.
             params = {
                 "latitude": str(latitude),
                 "longitude": str(lonitude),
-                "azimuth": str(azimuth),
-                "tilt": str(declination),
+                "azimuth": "nan" if tracking in ("azimuth", "dual") else str(azimuth),
+                "tilt": "nan" if tracking in ("tilt", "dual") else str(declination),
                 "minutely_15": "temperature_2m"
                 ",global_tilted_irradiance,global_tilted_irradiance_instant,diffuse_radiation,diffuse_radiation_instant,direct_radiation,direct_radiation_instant,snow_depth",
                 "daily": "sunrise,sunset",
