@@ -735,7 +735,7 @@ wheels = [
 
 [[package]]
 name = "open-meteo-solar-forecast"
-version = "0.1.29"
+version = "0.1.31"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
