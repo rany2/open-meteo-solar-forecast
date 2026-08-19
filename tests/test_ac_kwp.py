@@ -67,10 +67,8 @@ def _fake_api_data() -> dict:
     tz = timezone.utc
     t0 = int(datetime(2026, 8, 14, 12, 0, tzinfo=tz).timestamp())
     t1 = t0 + 900
-    # Pure diffuse irradiance on a horizontal plane (tilt 0) gives a GTI
-    # close to 1000 W/m² (G_STC) reduced only by diffuse IAM reflection
-    # losses, so each 2 kWp array produces roughly (but not exactly) 2 kW.
-    # A cool ambient temperature keeps the Faiman cell temperature near STC.
+    # Cool ambient keeps the cell temperature near STC, so each 2 kWp array
+    # produces roughly (but not exactly) 2 kW.
     t_amb = -9.2
     return {
         "utc_offset_seconds": 0,
@@ -110,8 +108,6 @@ class AcKwpClampTests(unittest.IsolatedAsyncioTestCase):
     async def test_no_inverter_limit(self) -> None:
         """Sum both arrays without clamping when no capacity is set."""
         total = await self._estimate_total(_make_forecast())
-        # Each 2 kWp array produces near-STC output, reduced by diffuse IAM
-        # reflection losses and the Faiman cell temperature model.
         assert 3000 < total < 4000
 
     async def test_shared_inverter_clamps_combined_output(self) -> None:
@@ -121,7 +117,6 @@ class AcKwpClampTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_per_array_inverters_clamp_individually(self) -> None:
         """Clamp each array to its own inverter capacity before summing."""
-        # Array 1 clamped to 1000 W, array 2 (~1900 W) unclamped.
         baseline = await self._per_array_baseline()
         total = await self._estimate_total(_make_forecast(ac_kwp=[1.0, 3.0]))
         assert total == 1000 + baseline

@@ -349,8 +349,7 @@ class OpenMeteoSolarForecast:
         if entry is not None and entry.times[0] <= self._window_start(
             now_ts, entry.utc_offset
         ):
-            # Cache spans the whole past window: only re-request the
-            # days that went stale since the last refresh.
+            # Cache covers the whole past window; only re-request stale days.
             stale = max(0.0, now_ts - entry.refreshed_at)
             past_days = min(self.past_days, math.ceil(stale / SECONDS_PER_DAY))
 
@@ -420,8 +419,7 @@ class OpenMeteoSolarForecast:
             for ts in minutely["time"]
         ]
 
-        # Averaged values cover the preceding 15 minutes; use the interval
-        # midpoint for their solar position.
+        # Averaged values cover the preceding 15 minutes, so use the midpoint.
         times_inst = pd.to_datetime(minutely["time"], unit="s", utc=True)
         times_avg = times_inst - pd.Timedelta(minutes=7.5)
 
@@ -464,7 +462,6 @@ class OpenMeteoSolarForecast:
         dni_inst_arr = minutely["direct_normal_irradiance_instant"]
         snow_depth_arr = minutely["snow_depth"]
         temp_arr = minutely["temperature_2m"]
-        # Wind speed (m/s) for the Faiman cell temperature model.
         wind_arr = minutely["wind_speed_10m"]
 
         time_arr = weather["time_arr"]

@@ -22,7 +22,7 @@ from open_meteo_solar_forecast.exceptions import (
     OpenMeteoSolarForecastConnectionError,
 )
 
-STEP = 900  # 15-minute resolution
+STEP = 900
 DAY = 86400
 
 

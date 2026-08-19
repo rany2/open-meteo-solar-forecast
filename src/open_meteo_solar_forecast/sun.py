@@ -26,12 +26,7 @@ def compute_gti(
     dni: list[float | None],
     array: dict[str, Any],
 ) -> pd.Series:
-    """Transpose horizontal irradiance components onto the array plane.
-
-    Uses the Perez-Driesse sky-diffuse model (a continuous, more accurate
-    reformulation of the Perez model) and applies incidence-angle modifier
-    (IAM) reflection losses to the beam and diffuse components, so the
-    returned value is the effective irradiance reaching the cells.
+    """Transpose horizontal irradiance onto the array plane, after IAM losses.
 
     Azimuth uses the Open-Meteo convention (0 = South, -90 = East, 90 = West)
     and is converted to the pvlib convention (0 = North, 90 = East).
@@ -63,8 +58,6 @@ def compute_gti(
         model="perez-driesse",
     )
 
-    # Reflection (IAM) losses: beam via the physical (Fresnel) model,
-    # sky/ground diffuse via Marion's integration of the same model.
     aoi = irradiance.aoi(
         surface_tilt, surface_azimuth, solpos["apparent_zenith"], solpos["azimuth"]
     )
@@ -77,8 +70,7 @@ def compute_gti(
         + total["poa_ground_diffuse"] * iam_diffuse["ground"]
     )
 
-    # The Perez model yields NaN when the sun is below the horizon (airmass
-    # undefined); there is no irradiance to transpose then, so use zero.
+    # Perez yields NaN below the horizon, where there is no irradiance anyway.
     return poa.fillna(0.0).clip(lower=0.0)
 
 

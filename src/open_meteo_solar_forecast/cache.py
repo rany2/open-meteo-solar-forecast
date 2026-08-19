@@ -16,7 +16,6 @@ from typing import Any
 
 SCHEMA_VERSION = 1
 
-#: Seconds in one day.
 SECONDS_PER_DAY = 86400
 
 
@@ -108,7 +107,6 @@ def merge_series(cached: dict[str, Any], fresh: dict[str, Any]) -> dict[str, Any
     if cached_m["time"][-1] < fresh_start:
         return fresh
 
-    # bisect-style scan: number of cached rows preceding the fresh window
     keep = sum(1 for ts in cached_m["time"] if ts < fresh_start)
 
     result = dict(fresh)
