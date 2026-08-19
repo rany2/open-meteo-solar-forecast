@@ -23,7 +23,11 @@ from .cache import (
     merge_series,
     prune_before,
 )
-from .constants import SNOW_ALBEDO_DEPTH_M, SNOW_GROUND_ALBEDO
+from .constants import (
+    ENSEMBLE_TRIM_MIN_MODELS,
+    SNOW_ALBEDO_DEPTH_M,
+    SNOW_GROUND_ALBEDO,
+)
 from .exceptions import (
     OpenMeteoSolarForecastAuthenticationError,
     OpenMeteoSolarForecastConfigError,
@@ -55,6 +59,11 @@ from .power import (
     inverter_dc_input_limit,
     irradiance_efficiency,
     module_wind_speed,
+)
+from .satellite import (
+    SATELLITE_BASE_URL,
+    blend_observations,
+    satellite_params,
 )
 from .snow import snow_dc_loss
 from .spectral import spectral_factor
@@ -111,6 +120,8 @@ class OpenMeteoSolarForecast:
     partial_shading: bool | list[bool] = False
     horizon_map: tuple(tuple(float)) | list[tuple(tuple(float))] = ((0.0,20.0),(360.0,20.0))
     albedo: float | list[float] = 0.25
+    use_satellite: bool = False
+    satellite_base_url: str | None = None
     cache_path: str | None = None
     cache_prune: bool = True
     cache_max_age: float | None = None
@@ -193,6 +204,8 @@ class OpenMeteoSolarForecast:
         uri: str,
         *,
         params: dict[str, Any] | None = None,
+        base_url: str | None = None,
+        with_model: bool = True,
     ) -> Any:
         """Handle a request to the API.
 
@@ -226,13 +239,13 @@ class OpenMeteoSolarForecast:
             params = params or {}
             params["apikey"] = self.api_key
 
-        if self.weather_model:
+        if with_model and self.weather_model:
             params = params or {}
             params["models"] = ",".join(self.weather_model)
 
         response = await self.session.request(
             "GET",
-            self.base_url + uri,
+            (base_url or self.base_url) + uri,
             params=params,
             timeout=ClientTimeout(total=self.request_timeout),
         )
@@ -444,6 +457,10 @@ class OpenMeteoSolarForecast:
         present, so a model that omits one field still contributes everything
         else. This matters in practice: several models return no ``snow_depth``
         at all, and dropping them wholesale would discard good irradiance.
+
+        Where enough models contribute, the highest and lowest values are
+        discarded first. A plain mean lets one badly wrong model drag the
+        result; trimming removes that leverage.
         """
         collapsed: dict[str, list[Any]] = {"time": minutely["time"]}
         steps = len(minutely["time"])
@@ -465,7 +482,12 @@ class OpenMeteoSolarForecast:
             averaged: list[Any] = []
             for i in range(steps):
                 present = [s[i] for s in series if s[i] is not None]
-                averaged.append(sum(present) / len(present) if present else None)
+                if not present:
+                    averaged.append(None)
+                    continue
+                if len(present) >= ENSEMBLE_TRIM_MIN_MODELS:
+                    present = sorted(present)[1:-1]
+                averaged.append(sum(present) / len(present))
             collapsed[variable] = averaged
 
         self._warn_on_absent_models(minutely)
@@ -522,11 +544,50 @@ class OpenMeteoSolarForecast:
             )
         return {key: [minutely[key][i] for i in valid_idx] for key in keys}
 
-    def _prepare_weather(self, data: Any, tz: timezone) -> dict[str, Any]:
+    async def _fetch_satellite(self) -> Any:
+        """Fetch observed irradiance, or None if it cannot be had.
+
+        Never raises: an observation is an enhancement, and losing it must not
+        cost the caller their forecast.
+        """
+        try:
+            return await self._request(
+                "/v1/archive",
+                params=satellite_params(
+                    self.latitude, self.longitude, self.past_days
+                ),
+                base_url=self.satellite_base_url or SATELLITE_BASE_URL,
+                with_model=False,
+            )
+        except Exception as err:  # noqa: BLE001
+            # Deliberately broad. The observation is an enhancement, so no
+            # failure mode of it may cost the caller their forecast. Outside
+            # the satellites' coverage the API answers with a body containing
+            # a bare NaN literal, which is not valid JSON and surfaces as a
+            # decode error rather than anything HTTP-shaped.
+            _LOGGER.warning(
+                "Satellite observations unavailable (%s: %s); "
+                "continuing with forecast irradiance only",
+                type(err).__name__,
+                err,
+            )
+            return None
+
+    def _prepare_weather(
+        self, data: Any, tz: timezone, satellite: Any = None
+    ) -> dict[str, Any]:
         """Prepare location-wide weather and solar geometry shared by all arrays."""
-        minutely = self._drop_null_entries(
-            self._collapse_ensemble(data["minutely_15"])
-        )
+        collapsed = self._collapse_ensemble(data["minutely_15"])
+        if satellite is not None:
+            collapsed, replaced = blend_observations(collapsed, satellite)
+            if replaced == 0:
+                _LOGGER.warning(
+                    "No satellite coverage at %.3f, %.3f; "
+                    "continuing with forecast irradiance only",
+                    self.latitude,
+                    self.longitude,
+                )
+        minutely = self._drop_null_entries(collapsed)
 
         time_arr = [
             dt.fromtimestamp(ts, UTC).astimezone(tz)
@@ -879,8 +940,9 @@ class OpenMeteoSolarForecast:
         wh_days: dict[dt, int] = defaultdict(int)
 
         data = await self._fetch_forecast()
+        satellite = await self._fetch_satellite() if self.use_satellite else None
         tz = timezone(timedelta(seconds=data["utc_offset_seconds"]))
-        weather = self._prepare_weather(data, tz)
+        weather = self._prepare_weather(data, tz, satellite)
 
         for array in self._array_params():
             self._accumulate_array_power(array, weather, w_avg, w_inst)

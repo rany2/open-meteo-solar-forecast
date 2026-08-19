@@ -86,7 +86,8 @@ if __name__ == "__main__":
 | --------- | ---------- | ----------- |
 | `base_url` | `str` | The base URL of the API (optional) |
 | `api_key` | `str` | Your API key (optional) |
-| `weather_model` | `str \| list[str] \| tuple[str, ...]` | Weather model(s) to average over. Defaults to a four-model ensemble; see [Weather models](#weather-models) (optional) |
+| `weather_model` | `str \| list[str] \| tuple[str, ...]` | Weather model(s) to combine. Defaults to a six-model ensemble; see [Weather models](#weather-models) (optional) |
+| `use_satellite` | `bool` | Substitute satellite-observed irradiance over the elapsed window. Regional coverage; see [Satellite observations](#satellite-observations-optional) (optional, default = False) |
 | `declination` | `int \| list[int] \| tuple[int, ...]` | The tilt of the solar panels (required) |
 | `azimuth` | `int \| list[int] \| tuple[int, ...]` | The direction the solar panels are facing, using the Open-Meteo convention: 0 = south, -90 = east, 90 = west, ±180 = north. To convert a compass bearing (0 = north, 90 = east, 180 = south, 270 = west), subtract 180. (required) |
 | `dc_kwp` | `float \| list[float] \| tuple[float, ...]` | The size of the solar panels in kWp (required) |
@@ -164,8 +165,13 @@ If **tracking** is set to a value other than `"none"`, the irradiance is calcula
 
 ### Weather models
 
-By default the forecast is averaged over four numerical weather models:
-`icon_seamless`, `gfs_seamless`, `ecmwf_ifs025` and `gem_seamless`.
+By default the forecast is combined from six numerical weather models:
+`icon_seamless`, `gfs_seamless`, `ecmwf_ifs025`, `gem_seamless`,
+`ukmo_seamless` and `meteofrance_seamless`.
+
+At each timestep the highest and lowest values are discarded and the rest
+averaged, so one badly wrong model cannot drag the result. Trimming is skipped
+where too few models supply a variable to still leave an average.
 
 Averaging cancels much of each model's individual error. Measured against
 satellite-observed irradiance, the ensemble cuts GHI RMSE by roughly **20%**
@@ -175,13 +181,14 @@ to be best where you live. The spread is not subtle: for one 6-day window in the
 Netherlands, `icon_seamless` predicted 81.7 kWh while `gfs_seamless` predicted
 125.4 kWh for the same array.
 
-These four were chosen because each supplies every variable the model needs at
-every location tested. Others were rejected on coverage: `jma_seamless` returns
-only 3 of the 10 required variables outside Japan, and `ukmo_seamless` and
-`meteofrance_seamless` omit `snow_depth` everywhere.
+The first four supply every variable the model needs at every location tested.
+The last two omit `snow_depth`, which is harmless because averaging is done per
+variable: they contribute irradiance and are simply absent from the snow
+average. `jma_seamless` is excluded, returning only 3 of the 10 required
+variables outside Japan.
 
-The cost is one larger request per refresh — about 2.2 MB instead of 0.64 MB,
-and roughly 1.3 s instead of 0.7 s. If that matters, request a single model:
+The cost is one larger request per refresh — about 3.3 MB instead of 0.64 MB.
+If that matters, request a single model:
 
 ```python
 async with OpenMeteoSolarForecast(
@@ -207,6 +214,43 @@ A useful side effect: models have different forecast horizons, and a timestamp
 survives as long as *any* model covers it. Requesting `icon_seamless` alone
 truncated one 16-day forecast eight days early, where the ensemble reached the
 full horizon.
+
+### Satellite observations (optional)
+
+Everything above is a *forecast*. For time that has already elapsed a
+geostationary satellite has actually watched the sky, and an observation beats
+a prediction: against satellite-derived irradiance the model ensemble carries
+11–29% relative error with a consistent negative bias.
+
+That matters for the figures that are partly historical — energy produced so far
+today, and power right now. Setting `use_satellite=True` fetches observed
+irradiance and substitutes it over the elapsed window:
+
+```python
+async with OpenMeteoSolarForecast(
+    ...,
+    use_satellite=True,
+) as forecast:
+    estimate = await forecast.estimate()
+```
+
+This is observed *irradiance*, not measured PV output; nothing learns from your
+system or needs a calibration period.
+
+Unlike the other corrections this one is **opt-in**, because coverage is
+regional:
+
+| Region | Coverage |
+| ------ | -------- |
+| Europe, Africa | yes, ~20 minutes behind |
+| South America, India | yes, ~2 hours behind |
+| Asia, Australia, New Zealand | intermittent |
+| **North America** | **none** — GOES is not yet integrated |
+
+It costs one extra request, and outside coverage it would return nothing, so
+turning it on for everyone would mean latency for no benefit. Only irradiance
+is substituted; temperature, wind and snow always come from the forecast
+models. Any failure or gap falls back to the forecast silently.
 
 ### Modelled losses
 

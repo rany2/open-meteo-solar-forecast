@@ -14,8 +14,8 @@ Completed work and its measurements live in [ACCURACY.md](ACCURACY.md).
 |---|---|---|---|---|
 | 1 | Irradiance-dependent (low-light) efficiency | 0.8–1.5 % | all users | **done** |
 | 2 | Horizon sky-view factor for diffuse | 0.8–13 % | `use_horizon` users | **done** |
-| 3 | Satellite-observed irradiance for the recent past | large for "now" | regional | open |
-| 4 | Trimmed-mean ensemble instead of mean | ~0.8 % | all users | deferred |
+| 3 | Satellite-observed irradiance for the recent past | large for "now" | regional | **done**, opt-in |
+| 4 | Wider ensemble + trimmed mean | −3.6 % RMSE | all users | **done** |
 | 5 | Instantaneous timestamp alignment | — | — | rejected |
 
 ---
@@ -132,7 +132,44 @@ Magnitude not yet measured.
 
 ## 3. Satellite-observed irradiance for the recent past
 
-**Status:** open. Regional, so unsuitable as a default.
+**Status:** done, behind `use_satellite=True`. See `satellite.py`.
+
+This is the one correction that is **not** on by default, which deliberately
+breaks the convention used everywhere else. Coverage is regional and the call
+costs latency, so enabling it for everyone would mean a wasted round trip for
+every North American user.
+
+How far the forecast drifts from observation, which is what substitution
+recovers over the elapsed window:
+
+| Site | Ensemble RMSE | Bias | Mean observed | Relative error |
+|---|---|---|---|---|
+| Seville | 59.9 | −25.7 | 533.1 | 11.2 % |
+| Lisbon | 64.0 | −25.8 | 525.8 | 12.2 % |
+| Rome | 65.5 | −24.8 | 502.0 | 13.0 % |
+| Athens | 69.6 | −20.5 | 508.0 | 13.7 % |
+| Munich | 70.3 | −5.6 | 408.9 | 17.2 % |
+| Warsaw | 75.0 | −12.1 | 371.5 | 20.2 % |
+| Dublin | 78.8 | −21.7 | 357.7 | 22.0 % |
+| Bergen | 77.4 | −13.2 | 265.7 | 29.2 % |
+
+The bias is negative everywhere: the ensemble systematically under-predicts
+irradiance against what the satellite actually saw.
+
+`satellite_radiation_seamless` was chosen after measuring the alternatives. It
+blends sources, runs at a 10-minute native step, and was only **15 minutes**
+behind real time when tested. `eumetsat_sarah3` lagged two days and
+`jma_jaxa_himawari` returned non-JSON, matching the open upstream report of it
+being broken.
+
+**Two traps worth recording.** Outside coverage the API answers with a body
+containing a bare `NaN` literal, which is not valid JSON, so the failure
+arrives as a decode error rather than anything HTTP-shaped; the handler is
+broad for that reason. And the satellite cadence (10, 15 or 30 minutes) never
+matches the 15-minute grid, so averaged variables are re-averaged per interval
+rather than sampled.
+
+### Original analysis
 
 `power_production_now` and `energy_production_today_remaining` are currently
 answered from a numerical weather prediction that may be hours old. For the
@@ -158,9 +195,35 @@ coverage exists, never a default. It also costs an extra API call.
 
 ---
 
-## 4. Trimmed-mean ensemble instead of mean
+## 4. Wider ensemble and trimmed mean
 
-**Status:** deferred. Small gain, and the default ensemble is too narrow.
+**Status:** done. Default ensemble widened to six models, with outlier
+trimming.
+
+The blocker recorded below — that trimming four models leaves only two — was
+dissolved by the per-variable averaging built for #2. Because each variable is
+averaged over whichever models supply it, `ukmo_seamless` and
+`meteofrance_seamless` can now join despite omitting `snow_depth`: they
+contribute irradiance and are simply absent from the snow average.
+
+Validated against satellite-observed irradiance over 8 sites:
+
+| Combiner | Mean RMSE | vs 4-model mean |
+|---|---|---|
+| 4 models, mean (previous default) | 71.9 | — |
+| 6 models, mean | 70.1 | −2.6 % |
+| 6 models, trimmed | **69.3** | **−3.6 %** |
+
+Trimming is skipped where fewer than five models supply a variable, so
+irradiance is trimmed (6 values, 4 kept) while `snow_depth` is not (4 values,
+all kept).
+
+Note that the resulting *energy* figures move in both directions by site
+(−2.6 % in the Netherlands, +1.1 % in Denver). That shift is a change of
+ensemble composition, not the improvement; the improvement is the RMSE
+reduction against observation above.
+
+### Original analysis
 
 Tested on 19,727 daytime samples across 10 sites, validated against
 satellite-observed irradiance:

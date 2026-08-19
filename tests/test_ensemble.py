@@ -11,7 +11,10 @@ import unittest
 
 from open_meteo_solar_forecast import OpenMeteoSolarForecast
 from open_meteo_solar_forecast.cache import fingerprint, merge_series
-from open_meteo_solar_forecast.constants import DEFAULT_WEATHER_MODELS
+from open_meteo_solar_forecast.constants import (
+    DEFAULT_WEATHER_MODELS,
+    ENSEMBLE_TRIM_MIN_MODELS,
+)
 from open_meteo_solar_forecast.exceptions import OpenMeteoSolarForecastInvalidModel
 from open_meteo_solar_forecast.params import normalize_weather_models
 
@@ -62,7 +65,11 @@ class WeatherModelNormalizationTests(unittest.TestCase):
     def test_default_is_the_ensemble(self) -> None:
         """Use the multi-model ensemble when nothing is specified."""
         assert _forecast().weather_model == list(DEFAULT_WEATHER_MODELS)
-        assert len(DEFAULT_WEATHER_MODELS) > 1
+
+    def test_default_ensemble_is_wide_enough_to_trim(self) -> None:
+        """Ship enough models that outlier trimming actually engages."""
+        assert len(DEFAULT_WEATHER_MODELS) >= ENSEMBLE_TRIM_MIN_MODELS
+        assert len(set(DEFAULT_WEATHER_MODELS)) == len(DEFAULT_WEATHER_MODELS)
 
     def test_single_string(self) -> None:
         """Accept one model as a plain string."""
@@ -220,6 +227,65 @@ class EnsembleCollapseTests(unittest.TestCase):
         with self.assertRaises(OpenMeteoSolarForecastInvalidModel) as ctx:
             forecast._collapse_ensemble(minutely)  # noqa: SLF001
         assert "snowfall" in str(ctx.exception)
+
+
+class EnsembleTrimmingTests(unittest.TestCase):
+    """Verify outlier trimming before averaging."""
+
+    @staticmethod
+    def _collapse(values_per_model: list[list[float]]) -> float:
+        """Collapse one timestep given each model's value for every variable."""
+        names = [f"m{i}" for i in range(len(values_per_model))]
+        forecast = _forecast(weather_model=names)
+        minutely: dict = {"time": [0]}
+        for name, values in zip(names, values_per_model, strict=True):
+            for var in forecast.MINUTELY_15_VARS:
+                minutely[f"{var}_{name}"] = [values[0]]
+        return forecast._collapse_ensemble(minutely)["temperature_2m"][0]  # noqa: SLF001
+
+    def test_extremes_are_discarded_when_wide_enough(self) -> None:
+        """Drop the highest and lowest before averaging.
+
+        With 1, 2, 3, 4, 100 the plain mean is 22.0. Discarding 1 and 100
+        leaves 2, 3, 4 for a mean of 3.0.
+        """
+        assert ENSEMBLE_TRIM_MIN_MODELS == 5
+        got = self._collapse([[1.0], [2.0], [3.0], [4.0], [100.0]])
+        assert abs(got - 3.0) < 1e-9
+
+    def test_narrow_ensembles_keep_the_plain_mean(self) -> None:
+        """Average everything when trimming would leave too little."""
+        got = self._collapse([[1.0], [2.0], [3.0], [10.0]])
+        assert abs(got - 4.0) < 1e-9
+
+    def test_a_single_wild_model_cannot_dominate(self) -> None:
+        """Resist one model being badly wrong, which is the point of trimming."""
+        sane = [[500.0], [510.0], [505.0], [495.0], [502.0], [498.0]]
+        wild = [*sane[:-1], [50000.0]]
+        assert abs(self._collapse(wild) - self._collapse(sane)) < 10.0
+
+    def test_trimming_respects_per_variable_availability(self) -> None:
+        """Count only the models that supplied the variable in question.
+
+        Irradiance comes from all six default models and is trimmed;
+        snow_depth comes from four and is not.
+        """
+        names = [f"m{i}" for i in range(6)]
+        forecast = _forecast(weather_model=names)
+        minutely: dict = {"time": [0]}
+        for i, name in enumerate(names):
+            for var in forecast.MINUTELY_15_VARS:
+                minutely[f"{var}_{name}"] = [float(i)]
+        # only the first four supply snow_depth
+        for name in names[4:]:
+            minutely[f"snow_depth_{name}"] = [None]
+
+        collapsed = forecast._collapse_ensemble(minutely)  # noqa: SLF001
+
+        # 0..5 trimmed to 1..4 -> 2.5
+        assert abs(collapsed["temperature_2m"][0] - 2.5) < 1e-9
+        # 0..3 untrimmed -> 1.5
+        assert abs(collapsed["snow_depth"][0] - 1.5) < 1e-9
 
 
 class EnsembleRequestTests(unittest.TestCase):

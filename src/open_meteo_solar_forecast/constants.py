@@ -140,17 +140,34 @@ SNOW_ALBEDO_DEPTH_M = 0.02
 # which matters because you cannot know in advance which model happens to be
 # best at a given location.
 #
-# These four were chosen because each returns every variable this library needs
-# at every location tested (Europe, North America, Japan, Australia, Africa,
-# South America). Others were rejected on coverage: jma_seamless supplies only
-# 3 of the 10 required variables outside Japan, while ukmo_seamless and
-# meteofrance_seamless omit snow_depth everywhere.
+# The first four return every variable this library needs at every location
+# tested (Europe, North America, Japan, Australia, Africa, South America). The
+# last two omit snow_depth everywhere, which is harmless: averaging is done per
+# variable, so they contribute irradiance and are simply absent from the snow
+# average. jma_seamless remains excluded, supplying only 3 of the 10 required
+# variables outside Japan.
+#
+# Widening from four to six cut GHI RMSE by a further 2.6% against
+# satellite-observed irradiance, and made trimming viable (see
+# ENSEMBLE_TRIM_MIN_MODELS).
 DEFAULT_WEATHER_MODELS = (
     "icon_seamless",
     "gfs_seamless",
     "ecmwf_ifs025",
     "gem_seamless",
+    "ukmo_seamless",
+    "meteofrance_seamless",
 )
+
+# Averaging is sensitive to a single badly wrong model. Discarding the highest
+# and lowest value at each timestep before averaging removes that leverage, and
+# measured a further 1.1% better than the plain mean over six models.
+#
+# Only applied when enough models remain afterwards to still be an average:
+# below this threshold the plain mean is used instead. With the default
+# ensemble that means irradiance is trimmed (6 values, 4 kept) while snow_depth
+# is not (4 values, all kept).
+ENSEMBLE_TRIM_MIN_MODELS = 5
 
 # --------------------------------------------------------------------------
 # Snow
