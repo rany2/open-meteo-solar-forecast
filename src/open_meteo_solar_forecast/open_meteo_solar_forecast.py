@@ -36,6 +36,7 @@ from .params import (
     is_list_like,
     normalize_param,
     normalize_required,
+    normalize_weather_models,
     validate_ac_kwp,
     validate_albedo,
     validate_azimuth,
@@ -92,7 +93,7 @@ class OpenMeteoSolarForecast:
     ac_kwp: float | list[float | None] | None = None
     api_key: str | None = None
     base_url: str | None = None
-    weather_model: str | None = None
+    weather_model: str | list[str] | tuple[str, ...] | None = None
     damping_morning: float | list[float] = 0.0
     damping_evening: float | list[float] = 0.0
     efficiency_factor: float | list[float] = 1.0
@@ -115,6 +116,8 @@ class OpenMeteoSolarForecast:
             self.base_url = "https://api.open-meteo.com"
         if self.ac_kwp is None:
             self.ac_kwp = float("inf")
+
+        self.weather_model = normalize_weather_models(self.weather_model)
 
         self._normalize_required_params()
         self._normalize_optional_params()
@@ -215,12 +218,8 @@ class OpenMeteoSolarForecast:
             params["apikey"] = self.api_key
 
         if self.weather_model:
-            if "," in self.weather_model:
-                raise OpenMeteoSolarForecastInvalidModel(
-                    "Multiple models are not supported"
-                )
             params = params or {}
-            params["models"] = self.weather_model
+            params["models"] = ",".join(self.weather_model)
 
         response = await self.session.request(
             "GET",
@@ -278,18 +277,23 @@ class OpenMeteoSolarForecast:
         return [dict(zip(names, row, strict=True)) for row in values]
 
     MINUTELY_15_VARS = (
-        "temperature_2m"
-        ",shortwave_radiation,shortwave_radiation_instant"
-        ",diffuse_radiation,diffuse_radiation_instant"
-        ",direct_normal_irradiance,direct_normal_irradiance_instant"
-        ",snowfall,snow_depth,wind_speed_10m"
+        "temperature_2m",
+        "shortwave_radiation",
+        "shortwave_radiation_instant",
+        "diffuse_radiation",
+        "diffuse_radiation_instant",
+        "direct_normal_irradiance",
+        "direct_normal_irradiance_instant",
+        "snowfall",
+        "snow_depth",
+        "wind_speed_10m",
     )
 
     def _forecast_params(self, past_days: int) -> dict[str, str]:
         return {
             "latitude": str(self.latitude),
             "longitude": str(self.longitude),
-            "minutely_15": self.MINUTELY_15_VARS,
+            "minutely_15": ",".join(self.MINUTELY_15_VARS),
             "wind_speed_unit": "ms",
             "forecast_days": str(self.forecast_days),
             "past_days": str(past_days),
@@ -303,11 +307,11 @@ class OpenMeteoSolarForecast:
             {
                 "latitude": str(self.latitude),
                 "longitude": str(self.longitude),
-                "minutely_15": self.MINUTELY_15_VARS,
+                "minutely_15": ",".join(self.MINUTELY_15_VARS),
                 "wind_speed_unit": "ms",
                 "timeformat": "unixtime",
                 "base_url": self.base_url,
-                "weather_model": self.weather_model,
+                "weather_model": list(self.weather_model),
             }
         )
 
@@ -398,6 +402,92 @@ class OpenMeteoSolarForecast:
 
         return trimmed
 
+    def _model_series_keys(
+        self, minutely: dict[str, list[Any]], variable: str
+    ) -> list[str]:
+        """Response keys holding *variable*, one per contributing model.
+
+        Open-Meteo only suffixes keys with the model name when more than one
+        model is requested; a single model returns the bare variable name.
+
+        Matching is by exact ``variable_model`` construction rather than by
+        prefix, because several variables are prefixes of others -
+        ``shortwave_radiation`` would otherwise also capture every
+        ``shortwave_radiation_instant_*`` series.
+        """
+        keys = [
+            key
+            for key in (f"{variable}_{model}" for model in self.weather_model)
+            if key in minutely
+        ]
+        if not keys and variable in minutely:
+            keys = [variable]
+        return keys
+
+    def _collapse_ensemble(
+        self, minutely: dict[str, list[Any]]
+    ) -> dict[str, list[Any]]:
+        """Average each variable across the models that supplied it.
+
+        Averaging is per variable and per timestep over whatever is actually
+        present, so a model that omits one field still contributes everything
+        else. This matters in practice: several models return no ``snow_depth``
+        at all, and dropping them wholesale would discard good irradiance.
+        """
+        collapsed: dict[str, list[Any]] = {"time": minutely["time"]}
+        steps = len(minutely["time"])
+
+        for variable in self.MINUTELY_15_VARS:
+            keys = self._model_series_keys(minutely, variable)
+            if not keys:
+                msg = (
+                    f"No requested weather model returned {variable!r}. "
+                    f"Requested models: {', '.join(self.weather_model)}"
+                )
+                raise OpenMeteoSolarForecastInvalidModel(msg)
+
+            if len(keys) == 1:
+                collapsed[variable] = minutely[keys[0]]
+                continue
+
+            series = [minutely[key] for key in keys]
+            averaged: list[Any] = []
+            for i in range(steps):
+                present = [s[i] for s in series if s[i] is not None]
+                averaged.append(sum(present) / len(present) if present else None)
+            collapsed[variable] = averaged
+
+        self._warn_on_absent_models(minutely)
+        return collapsed
+
+    def _warn_on_absent_models(self, minutely: dict[str, list[Any]]) -> None:
+        """Log models that contributed nothing, so silent gaps are visible."""
+        if len(self.weather_model) == 1:
+            return
+        for model in self.weather_model:
+            supplied = [
+                variable
+                for variable in self.MINUTELY_15_VARS
+                if any(
+                    value is not None
+                    for value in minutely.get(f"{variable}_{model}", [])
+                )
+            ]
+            if not supplied:
+                _LOGGER.warning(
+                    "Weather model %r returned no usable data for this "
+                    "location and was excluded from the ensemble",
+                    model,
+                )
+            elif len(supplied) < len(self.MINUTELY_15_VARS):
+                missing = set(self.MINUTELY_15_VARS) - set(supplied)
+                _LOGGER.debug(
+                    "Weather model %r supplied no %s; averaging those "
+                    "variables over the remaining models",
+                    model,
+                    ", ".join(sorted(missing)),
+                )
+
     @staticmethod
     def _drop_null_entries(minutely: dict[str, list[Any]]) -> dict[str, list[Any]]:
         """Remove timestamps where any weather variable is null.
@@ -423,7 +513,9 @@ class OpenMeteoSolarForecast:
 
     def _prepare_weather(self, data: Any, tz: timezone) -> dict[str, Any]:
         """Prepare location-wide weather and solar geometry shared by all arrays."""
-        minutely = self._drop_null_entries(data["minutely_15"])
+        minutely = self._drop_null_entries(
+            self._collapse_ensemble(data["minutely_15"])
+        )
 
         time_arr = [
             dt.fromtimestamp(ts, UTC).astimezone(tz)

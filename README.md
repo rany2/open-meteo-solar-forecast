@@ -86,6 +86,7 @@ if __name__ == "__main__":
 | --------- | ---------- | ----------- |
 | `base_url` | `str` | The base URL of the API (optional) |
 | `api_key` | `str` | Your API key (optional) |
+| `weather_model` | `str \| list[str] \| tuple[str, ...]` | Weather model(s) to average over. Defaults to a four-model ensemble; see [Weather models](#weather-models) (optional) |
 | `declination` | `int \| list[int] \| tuple[int, ...]` | The tilt of the solar panels (required) |
 | `azimuth` | `int \| list[int] \| tuple[int, ...]` | The direction the solar panels are facing, using the Open-Meteo convention: 0 = south, -90 = east, 90 = west, ±180 = north. To convert a compass bearing (0 = north, 90 = east, 180 = south, 270 = west), subtract 180. (required) |
 | `dc_kwp` | `float \| list[float] \| tuple[float, ...]` | The size of the solar panels in kWp (required) |
@@ -154,6 +155,52 @@ The **horizon map** is a tuple of 2-tuples, where each 2-tuple consists of (azim
 If **partial_shading** is disabled and a shadow is detected on the module, only the diffuse irradiation will be used to calculate the power output. This is useful if the shading is predominantly from far-away objects, which can be treated as shading the whole module at once or not. If partial_shading is enabled and a shadow is detected on the module, the shadow is treated as partial. This is useful if the shading arises from close-by objects, which cast 'hard' contoured shadows on the module. In this case, an experimental calculation is used taking into account the 'sunniness' of the conditions. This is done via the ratio of diffuse and direct irradiation. A large share of diffuse irradiation (cloudy day) will let the module run as homogeneously shaded at diffuse power. A small share of diffuse irradiation (sunny) day will reduce the diffuse power even more, since hard partial shadows can shut down the module completely.
 
 If **tracking** is set to a value other than `"none"`, the irradiance is calculated for a panel that follows the sun on the given axis. `"azimuth"` models a vertical-axis (east-west) tracker and ignores the `azimuth` parameter, `"tilt"` models a tilt-axis tracker and ignores the `declination` parameter, and `"dual"` models a dual-axis tracker and ignores both. Like the other per-array parameters, it can be passed as a list/tuple for multiple arrays.
+
+### Weather models
+
+By default the forecast is averaged over four numerical weather models:
+`icon_seamless`, `gfs_seamless`, `ecmwf_ifs025` and `gem_seamless`.
+
+Averaging cancels much of each model's individual error. Measured against
+satellite-observed irradiance, the ensemble cuts GHI RMSE by roughly **20%**
+versus a typical single model, and still beats the *best* single model at most
+locations — which matters because you cannot know in advance which model happens
+to be best where you live. The spread is not subtle: for one 6-day window in the
+Netherlands, `icon_seamless` predicted 81.7 kWh while `gfs_seamless` predicted
+125.4 kWh for the same array.
+
+These four were chosen because each supplies every variable the model needs at
+every location tested. Others were rejected on coverage: `jma_seamless` returns
+only 3 of the 10 required variables outside Japan, and `ukmo_seamless` and
+`meteofrance_seamless` omit `snow_depth` everywhere.
+
+The cost is one larger request per refresh — about 2.2 MB instead of 0.64 MB,
+and roughly 1.3 s instead of 0.7 s. If that matters, request a single model:
+
+```python
+async with OpenMeteoSolarForecast(
+    ...,
+    weather_model="icon_seamless",
+) as forecast:
+    estimate = await forecast.estimate()
+```
+
+Or choose your own ensemble, as a list or a comma-separated string:
+
+```python
+weather_model=["icon_seamless", "ecmwf_ifs025"]
+weather_model="icon_seamless,ecmwf_ifs025"
+```
+
+Each variable is averaged over the models that actually return it, so a model
+missing one field still contributes the rest. An error is raised only if no
+requested model supplies a required variable. Changing the selection
+invalidates any cached response automatically.
+
+A useful side effect: models have different forecast horizons, and a timestamp
+survives as long as *any* model covers it. Requesting `icon_seamless` alone
+truncated one 16-day forecast eight days early, where the ensemble reached the
+full horizon.
 
 ### Modelled losses
 

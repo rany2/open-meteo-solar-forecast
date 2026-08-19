@@ -58,6 +58,28 @@ ETA_INV_NOM = 0.96
 ETA_INV_REF = 0.9637
 
 # --------------------------------------------------------------------------
+# Weather models
+# --------------------------------------------------------------------------
+# Averaging several numerical weather predictions cancels much of the
+# model-specific error, and does so without needing any measured data. Against
+# satellite-observed irradiance this cuts GHI RMSE by roughly 20% versus a
+# typical single model, and still beats the *best* single model at most sites -
+# which matters because you cannot know in advance which model happens to be
+# best at a given location.
+#
+# These four were chosen because each returns every variable this library needs
+# at every location tested (Europe, North America, Japan, Australia, Africa,
+# South America). Others were rejected on coverage: jma_seamless supplies only
+# 3 of the 10 required variables outside Japan, while ukmo_seamless and
+# meteofrance_seamless omit snow_depth everywhere.
+DEFAULT_WEATHER_MODELS = (
+    "icon_seamless",
+    "gfs_seamless",
+    "ecmwf_ifs025",
+    "gem_seamless",
+)
+
+# --------------------------------------------------------------------------
 # Snow
 # --------------------------------------------------------------------------
 # Parallel-connected cell strings along a row's slant height. A 60-cell module

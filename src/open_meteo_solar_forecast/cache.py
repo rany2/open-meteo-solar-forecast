@@ -107,6 +107,13 @@ def merge_series(cached: dict[str, Any], fresh: dict[str, Any]) -> dict[str, Any
     if cached_m["time"][-1] < fresh_start:
         return fresh
 
+    # The request fingerprint normally guarantees identical key sets, but a
+    # model can transiently stop returning a variable. Splicing mismatched
+    # series would raise KeyError or silently misalign them, so prefer the
+    # fresh response alone.
+    if set(cached_m) != set(fresh_m):
+        return fresh
+
     keep = sum(1 for ts in cached_m["time"] if ts < fresh_start)
 
     result = dict(fresh)

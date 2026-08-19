@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from .exceptions import OpenMeteoSolarForecastConfigError
+from .constants import DEFAULT_WEATHER_MODELS
+from .exceptions import (
+    OpenMeteoSolarForecastConfigError,
+    OpenMeteoSolarForecastInvalidModel,
+)
 
 VALID_TRACKING = {"none", "azimuth", "tilt", "dual"}
 
@@ -78,6 +82,41 @@ def validate_albedo(values: list[float]) -> None:
         if not 0.0 <= albedo <= 1.0:
             msg = f"albedo must be within [0, 1], got {albedo}"
             raise OpenMeteoSolarForecastConfigError(msg)
+
+
+def normalize_weather_models(value: Any) -> list[str]:
+    """Normalize the weather model selection to a list of model names.
+
+    Accepts ``None`` for the default ensemble, a single name, a
+    comma-separated string, or a list/tuple of names. Duplicates are removed
+    while preserving order, because requesting the same model twice would
+    silently double its weight in the average.
+    """
+    if value is None:
+        return list(DEFAULT_WEATHER_MODELS)
+
+    if isinstance(value, str):
+        candidates = value.split(",")
+    elif isinstance(value, list | tuple):
+        candidates = [str(item) for item in value]
+    else:
+        msg = (
+            "weather_model must be a string, a list/tuple of strings, or None; "
+            f"got {type(value).__name__}"
+        )
+        raise OpenMeteoSolarForecastInvalidModel(msg)
+
+    models: list[str] = []
+    for candidate in candidates:
+        name = candidate.strip()
+        if name and name not in models:
+            models.append(name)
+
+    if not models:
+        msg = "weather_model must name at least one model"
+        raise OpenMeteoSolarForecastInvalidModel(msg)
+
+    return models
 
 
 def validate_ac_kwp(values: list[float]) -> None:

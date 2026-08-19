@@ -104,7 +104,7 @@ its effect shows up in winter, and is covered by `tests/test_snow_model.py`.
 
 ## Tier 2 — Better forecast inputs. The largest accuracy gain.
 
-### 2.1 Multi-model ensemble — 19–27 % GHI RMSE reduction
+### 2.1 Multi-model ensemble — 19–27 % GHI RMSE reduction  ✅ IMPLEMENTED
 
 The library rejects multiple models outright:
 
@@ -125,6 +125,46 @@ keys. Validated against satellite-observed GHI, May–Jul, daytime hours:
 The ensemble also beats the best single model — and you cannot know in advance
 *which* model is best at a user's location without validation data. Averaging
 removes that gamble. One request, no extra API calls.
+
+**Shipped default: `icon_seamless`, `gfs_seamless`, `ecmwf_ifs025`,
+`gem_seamless`.** Re-validated with exactly this four-model set over Apr–Jul:
+
+| Site | Best single | Typical single | Ensemble | vs best | vs typical |
+|---|---|---|---|---|---|
+| Munich | 80.0 | 96.6 | **74.5** | −6.9 % | −22.9 % |
+| Seville | 68.9 | 71.9 | **60.2** | −12.5 % | −16.2 % |
+| Bergen | 90.1 | 100.5 | **81.4** | −9.7 % | −19.1 % |
+| Warsaw | 86.2 | 102.4 | **78.4** | −9.1 % | −23.4 % |
+| Dublin | 81.7 | 103.6 | **80.8** | −1.1 % | −22.0 % |
+
+Model selection was driven by variable coverage, measured across Europe, North
+America, Japan, Australia, Africa and South America:
+
+| Model | Variables returned | Verdict |
+|---|---|---|
+| icon, gfs, ecmwf, gem | 10/10 everywhere | shipped |
+| ukmo, meteofrance | 9/10 (no `snow_depth`) | usable, not default |
+| jma | 3/10 outside Japan | rejected |
+
+Cost at the default window: payload 0.64 MB → 2.73 MB (5 models) or ~2.2 MB
+(4 models); latency 0.7 s → 1.4 s.
+
+**Bonus: a longer usable horizon.** Models have different forecast lengths, and
+a timestamp survives if *any* model covers it. At one site `icon_seamless`
+alone truncated a 16-day forecast eight days early (last usable interval
+08-26), where the ensemble reached the full horizon (09-03) and retained 76 %
+of raw intervals versus 67 %.
+
+**Implementation notes.**
+
+- Open-Meteo only suffixes response keys with the model name when *more than
+  one* model is requested; a single model returns bare keys. Both are handled.
+- Keys are matched by exact `variable_model` construction, never by prefix.
+  Several variable names are prefixes of others, so prefix matching would fold
+  every `shortwave_radiation_instant_*` series into `shortwave_radiation`.
+- Averaging happens per variable and per timestep, *before* the existing
+  null-row filter. Doing it after would let one all-null series from a single
+  model discard the entire dataset.
 
 ### 2.2 Pre-trained bias correction (MOS) — a further ~6 %
 
@@ -249,7 +289,7 @@ loader uses a semaphore and backs off on HTTP 429.
 | 1.1 DC system losses | ✅ implemented |
 | 1.2 inverter efficiency curve | ✅ implemented |
 | 1.3 NREL snow coverage | ✅ implemented |
-| 2.1 multi-model ensemble | ⬜ next — largest remaining gain |
+| 2.1 multi-model ensemble | ✅ implemented |
 | 3.1–3.4 second-order physics | ⬜ pending |
 | 2.2 pre-trained MOS | ⬜ pending; ship opt-in until the Munich regression is understood |
 
