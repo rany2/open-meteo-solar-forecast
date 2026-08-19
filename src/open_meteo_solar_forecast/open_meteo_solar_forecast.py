@@ -13,6 +13,7 @@ from typing import Any, NamedTuple, Self
 import numpy
 import pandas as pd
 from aiohttp import ClientError, ClientSession, ClientTimeout
+from pvlib import atmosphere
 
 from .cache import (
     SECONDS_PER_DAY,
@@ -22,6 +23,7 @@ from .cache import (
     merge_series,
     prune_before,
 )
+from .constants import SNOW_ALBEDO_DEPTH_M, SNOW_GROUND_ALBEDO
 from .exceptions import (
     OpenMeteoSolarForecastAuthenticationError,
     OpenMeteoSolarForecastConfigError,
@@ -45,14 +47,16 @@ from .params import (
 from .power import (
     _quarter_hour_energy,
     calculate_damping_coefficient,
+    cell_temperature_series,
     daily_energy,
-    diffuse_fraction,
-    gen_power,
+    gen_power_at_temp,
     hourly_average_power,
     inverter_ac_power,
     inverter_dc_input_limit,
+    module_wind_speed,
 )
 from .snow import snow_dc_loss
+from .spectral import spectral_factor
 from .sun import (
     build_sun_times,
     check_horizon_shading,
@@ -68,11 +72,12 @@ _LOGGER = logging.getLogger(__name__)
 class _ArraySeries(NamedTuple):
     """Vectorised per-timestep series precomputed for a single PV array."""
 
-    gti_avg: list[float]
-    gti_inst: list[float]
+    irr_avg: numpy.ndarray
+    irr_inst: numpy.ndarray
     damping: list[float]
-    horizon_shading: Any
     snow_loss: numpy.ndarray
+    tcell_avg: numpy.ndarray
+    tcell_inst: numpy.ndarray
     dc_wp: float
     pdc0: float | None
 
@@ -287,6 +292,8 @@ class OpenMeteoSolarForecast:
         "snowfall",
         "snow_depth",
         "wind_speed_10m",
+        "relative_humidity_2m",
+        "surface_pressure",
     )
 
     def _forecast_params(self, past_days: int) -> dict[str, str]:
@@ -531,14 +538,51 @@ class OpenMeteoSolarForecast:
             daily_dates, self.latitude, self.longitude, tz
         )
 
+        solpos_inst = solar_position(times_inst, self.latitude, self.longitude)
+        solpos_avg = solar_position(times_avg, self.latitude, self.longitude)
+
+        # Faiman's coefficients expect wind at module height, not the 10 m
+        # meteorological standard the API reports.
+        wind_module = [module_wind_speed(w) for w in minutely["wind_speed_10m"]]
+
+        # Spectral mismatch depends on path length and water vapour, neither of
+        # which varies by array, so compute it once for the whole location.
+        spectral = spectral_factor(
+            minutely["temperature_2m"],
+            minutely["relative_humidity_2m"],
+            minutely["surface_pressure"],
+            atmosphere.get_relative_airmass(solpos_avg["apparent_zenith"]),
+        )
+
+        # Snow on the ground reflects far more onto a tilted array than bare
+        # ground. This is about the ground, not the modules; snow.py handles
+        # what settles on the panels.
+        ground_is_snowy = (
+            numpy.asarray(minutely["snow_depth"], dtype=float) > SNOW_ALBEDO_DEPTH_M
+        )
+
+        # Ambient temperature aligned to each interval. Averaged irradiance
+        # pairs with the interval mean; instantaneous irradiance pairs with the
+        # value at the interval start.
+        temp = numpy.asarray(minutely["temperature_2m"], dtype=float)
+        temp_interval_mean = temp.copy()
+        temp_interval_mean[1:] = (temp[1:] + temp[:-1]) / 2.0
+        temp_interval_start = temp.copy()
+        temp_interval_start[1:] = temp[:-1]
+
         return {
             "minutely": minutely,
             "time_arr": time_arr,
             "times_index": times_inst,
-            "solpos_inst": solar_position(times_inst, self.latitude, self.longitude),
-            "solpos_avg": solar_position(times_avg, self.latitude, self.longitude),
+            "solpos_inst": solpos_inst,
+            "solpos_avg": solpos_avg,
             "sunrise": sunrise_dict,
             "sunset": sunset_dict,
+            "wind_module": wind_module,
+            "spectral": spectral,
+            "ground_is_snowy": ground_is_snowy,
+            "temp_interval_mean": temp_interval_mean,
+            "temp_interval_start": temp_interval_start,
         }
 
     def _array_series(
@@ -554,20 +598,27 @@ class OpenMeteoSolarForecast:
         time_arr = weather["time_arr"]
         solpos_inst = weather["solpos_inst"]
 
+        # Raise the ground albedo where there is snow lying, which materially
+        # increases what a tilted array collects in winter.
+        albedo = numpy.where(
+            weather["ground_is_snowy"], SNOW_GROUND_ALBEDO, array["albedo"]
+        )
+        array = {**array, "albedo": albedo}
+
         gti_avg_arr = compute_gti(
             weather["solpos_avg"],
             minutely["shortwave_radiation"],
             minutely["diffuse_radiation"],
             minutely["direct_normal_irradiance"],
             array,
-        ).tolist()
+        ).to_numpy()
         gti_inst_arr = compute_gti(
             solpos_inst,
             minutely["shortwave_radiation_instant"],
             minutely["diffuse_radiation_instant"],
             minutely["direct_normal_irradiance_instant"],
             array,
-        ).tolist()
+        ).to_numpy()
 
         sunrise_dict = weather["sunrise"]
         sunset_dict = weather["sunset"]
@@ -586,16 +637,53 @@ class OpenMeteoSolarForecast:
             hmap_arr = numpy.array(array["horizon_map"]).T
             horizon_shading = check_horizon_shading(solpos_inst, hmap_arr)
         else:
-            horizon_shading = [False] * len(time_arr)
+            horizon_shading = numpy.zeros(len(time_arr), dtype=bool)
+
+        irr_avg_arr = self._effective_irradiance(
+            gti_avg_arr,
+            minutely["shortwave_radiation"],
+            minutely["diffuse_radiation"],
+            horizon_shading,
+            array,
+        )
+        irr_inst_arr = self._effective_irradiance(
+            gti_inst_arr,
+            minutely["shortwave_radiation_instant"],
+            minutely["diffuse_radiation_instant"],
+            horizon_shading,
+            array,
+        )
+
+        # Spectral mismatch applies to whatever light actually reaches the
+        # cell, so it is applied after the shading branch is resolved.
+        spectral = weather["spectral"]
+        irr_avg_arr = irr_avg_arr * spectral
+        irr_inst_arr = irr_inst_arr * spectral
+
+        times = weather["times_index"]
+        wind_module = weather["wind_module"]
+        tcell_avg = cell_temperature_series(
+            times, irr_avg_arr, weather["temp_interval_mean"], wind_module
+        )
+        # Thermal inertia only makes sense for an instantaneous reading; over
+        # an interval average the lag cancels out.
+        tcell_inst = cell_temperature_series(
+            times,
+            irr_inst_arr,
+            weather["temp_interval_start"],
+            wind_module,
+            thermal_inertia=True,
+        )
 
         dc_wp = array["dc_kwp"] * 1000
 
         return _ArraySeries(
-            gti_avg=gti_avg_arr,
-            gti_inst=gti_inst_arr,
+            irr_avg=irr_avg_arr,
+            irr_inst=irr_inst_arr,
             damping=damping_factors,
-            horizon_shading=horizon_shading,
-            snow_loss=self._array_snow_loss(array, weather, gti_avg_arr),
+            snow_loss=self._array_snow_loss(array, weather, gti_avg_arr.tolist()),
+            tcell_avg=tcell_avg,
+            tcell_inst=tcell_inst,
             dc_wp=dc_wp,
             # Per-array inverter (only when per-array capacities are given; a
             # shared inverter converts the combined DC output later).
@@ -605,6 +693,46 @@ class OpenMeteoSolarForecast:
                 else inverter_dc_input_limit(array["ac_kwp"] * 1000, dc_wp)
             ),
         )
+
+    @staticmethod
+    def _effective_irradiance(
+        gti: numpy.ndarray,
+        ghi: list[float],
+        dhi: list[float],
+        horizon_shading: numpy.ndarray,
+        array: dict[str, Any],
+    ) -> numpy.ndarray:
+        """Irradiance reaching the modules once horizon shading is applied.
+
+        When the horizon blocks the sun, only diffuse light is collected. With
+        ``partial_shading`` the diffuse contribution is further scaled by how
+        diffuse the sky is overall.
+
+        --- experimental empiric partial shading approach ---
+        On a sunny day (low diffuse fraction) 'hard' shadows make the bypass
+        diodes shut the module down almost completely. On a cloudy day (high
+        diffuse fraction) there are no hard shadows and the module runs at pure
+        diffuse power. In between, the effect is assumed proportional.
+        Inspired by https://pvlib-python.readthedocs.io/en/stable/gallery/shading/plot_partial_module_shading_simple.html#calculating-shading-loss-across-shading-scenarios
+        """
+        if not array["use_horizon"] or not horizon_shading.any():
+            return gti
+
+        diffuse = numpy.asarray(dhi, dtype=float)
+        if array["partial_shading"]:
+            direct = numpy.asarray(ghi, dtype=float) - diffuse
+            total = diffuse + direct
+            # Preferred over a plain diffuse/direct ratio, which collapses to
+            # zero in morning and evening conditions where direct is zero.
+            fraction = numpy.where(
+                total > 0,
+                numpy.clip(diffuse / numpy.where(total > 0, total, 1.0), 0.0, None),
+                1.0,
+            )
+        else:
+            fraction = 1.0
+
+        return numpy.where(horizon_shading, diffuse * fraction, gti)
 
     def _accumulate_array_power(
         self,
@@ -622,44 +750,13 @@ class OpenMeteoSolarForecast:
             global horizontal irr. (GHI): sum of diffuse and direct sunlight collected on a horizontal plane (tilt = 0°)
             global tilted irr. (GTI): sum of diffuse and direct sunlight collected on a tilted plane
         """
-        minutely = weather["minutely"]
-        ghi_avg_arr = minutely["shortwave_radiation"]
-        ghi_inst_arr = minutely["shortwave_radiation_instant"]
-        dhi_avg_arr = minutely["diffuse_radiation"]
-        dhi_inst_arr = minutely["diffuse_radiation_instant"]
-        temp_arr = minutely["temperature_2m"]
-        wind_arr = minutely["wind_speed_10m"]
         time_arr = weather["time_arr"]
-
         s = self._array_series(array, weather)
-
-        use_horizon = array["use_horizon"]
-        partial_shading = array["partial_shading"]
         efficiency = array["efficiency_factor"]
 
         for i, time in enumerate(time_arr):
             if i == 0:
                 continue
-
-            g_avg = s.gti_avg[i]
-            g_inst = s.gti_inst[i]
-            d_avg = dhi_avg_arr[i]
-            d_inst = dhi_inst_arr[i]
-            dr_avg = ghi_avg_arr[i] - d_avg
-            dr_inst = ghi_inst_arr[i] - d_inst
-
-            # Calculate diffuse contribution (only if partial_shading enabled).
-            # Preferred over the simple ratio d/dr, because that may turn 0
-            # unexpectedly in morning/evening conditions, when dr = 0.
-            if use_horizon and partial_shading:
-                f_avg = diffuse_fraction(d_avg, dr_avg)
-                f_inst = diffuse_fraction(d_inst, dr_inst)
-            else:
-                f_avg = 1.0
-                f_inst = 1.0
-
-            temp_avg = (temp_arr[i] + temp_arr[i - 1]) / 2
-            temp_inst = temp_arr[i - 1]
 
             # For minutely data, the GTI start time is 15 minutes before the
             # time even for instant data (since the data is averaged over 15
@@ -668,33 +765,21 @@ class OpenMeteoSolarForecast:
 
             eff_damped = efficiency * s.damping[i]
 
-            # If horizon-shaded, apply diffuse radiation and optionally the
-            # diffuse/direct factor.
-            # --- experimental empiric partial shading approach ---
-            # On a sunny day (low f), 'hard' shadows result in the bypass
-            # diodes shutting off the module almost completely. On a cloudy
-            # day (high f), no 'hard' shadows are present and the module
-            # operates at pure diffuse power. In between, the partial shading
-            # effect is assumed to be directly dependent on f.
-            # Inspired by https://pvlib-python.readthedocs.io/en/stable/gallery/shading/plot_partial_module_shading_simple.html#calculating-shading-loss-across-shading-scenarios
-            if s.horizon_shading[i]:
-                irr_avg = d_avg * f_avg
-                irr_inst = d_inst * f_inst
-            else:
-                irr_avg = g_avg
-                irr_inst = g_inst
-
-            wind = wind_arr[i]
-
             # Snow shades whole strings rather than attenuating irradiance,
             # so it derates DC power instead of scaling the input irradiance.
             snow_factor = 1.0 - s.snow_loss[i]
 
             dc_avg = (
-                gen_power(irr_avg, temp_avg, wind, eff_damped, s.dc_wp) * snow_factor
+                gen_power_at_temp(
+                    s.irr_avg[i], s.tcell_avg[i], eff_damped, s.dc_wp
+                )
+                * snow_factor
             )
             dc_inst = (
-                gen_power(irr_inst, temp_inst, wind, eff_damped, s.dc_wp) * snow_factor
+                gen_power_at_temp(
+                    s.irr_inst[i], s.tcell_inst[i], eff_damped, s.dc_wp
+                )
+                * snow_factor
             )
 
             if s.pdc0 is not None:

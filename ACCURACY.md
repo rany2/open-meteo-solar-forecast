@@ -213,21 +213,99 @@ cc_frac      -0.0267 +/- 0.0042
 
 ---
 
-## Tier 3 — Second-order physics. Cheap, small, safe.
+## Tier 3 — Second-order physics. Cheap, small, safe.  ✅ IMPLEMENTED
 
-| # | Improvement | pvlib call | Effect |
+### 3.1 Wind reference height — the power law is the wrong tool
+
+Faiman is driven by wind at *module* height; the API reports the
+meteorological standard of 10 m. Confirmed by Driesse: "The Faiman model
+coefficients and NOCT values are typically determined using wind speed measured
+near module height", whereas "SAPM and PVsyst coefficients are specified for use
+with wind speed data at the standard 10 m height."
+
+The original plan was `atmosphere.windspeed_powerlaw`. That is explicitly
+cautioned against by the pvlib maintainers, because wind-profile laws "are not
+applicable close to the ground or close to the level of the objects that
+contribute to the roughness" — precisely where modules sit.
+
+Shipped instead: a fixed empirical ratio, the mean of the 10 m → 2 m values
+Driesse collects from the literature (0.51, 0.56, 0.67, 0.725). The choice
+within that range barely matters:
+
+| Ratio | Netherlands | Oslo | Seville |
 |---|---|---|---|
-| 3.1 | Wind 10 m → module height | `atmosphere.windspeed_powerlaw` | −1.10 % (annual) |
-| 3.2 | Spectral correction | `spectrum.spectral_factor_firstsolar` | +0.07 % NL summer, **+2.4 % Oslo winter** |
-| 3.3 | Snow-aware ground albedo | `albedo=0.65` when snow present | **+1.5 % Oslo winter** |
-| 3.4 | Thermal inertia | `temperature.prilliman` | +0.05 % energy, better 15-min shape |
+| 0.510 | −1.49 % | −1.31 % | −1.43 % |
+| 0.616 (**shipped**) | −1.10 % | −0.97 % | −1.06 % |
+| 0.725 | −0.74 % | −0.66 % | −0.73 % |
 
-3.1 matters because Faiman is driven by wind at module height, but the library
-passes 10 m wind unmodified, under-predicting cell temperature by 2–4 °C.
+The full literature spread is worth only ~0.7 percentage points of annual
+energy, so the uncertainty is bounded and small.
 
-3.2 needs precipitable water, derivable from already-available data via
-`atmosphere.gueymard94_pw(temp_air, relative_humidity)` — `relative_humidity_2m`,
-`dew_point_2m` and `surface_pressure` are all available at `minutely_15`.
+### 3.2 Spectral correction
+
+Needs precipitable water, derived via
+`atmosphere.gueymard94_pw(temp_air, relative_humidity)`. `relative_humidity_2m`
+and `surface_pressure` were added to the request; all four default models
+supply both at every location tested.
+
+Measured over a full year: **+0.76 % Netherlands, +0.85 % Oslo, +0.28 %
+Seville**.
+
+One correction to the original study: the direction was stated backwards there.
+For crystalline silicon the factor *rises* with water vapour and airmass
+(monosi: 0.985 at 0.37 cm precipitable water, 1.003 at 3.55 cm; 0.981 at AM 1.0,
+1.040 at AM 5.0). It is a small effect either way, within about ±2 %.
+
+### 3.3 Snow-aware ground albedo
+
+Albedo is raised to 0.65 where ground snow exceeds 2 cm. Worth **+0.25 %**
+annually in Oslo (snow lying 19 % of hours), nil where it never snows.
+
+### 3.4 Thermal inertia
+
+The original study measured this at +0.05 % and nearly dismissed it. That
+measurement was invalid: it used hourly data, and `temperature.prilliman`
+silently declines to smooth anything sampled at 20 minutes or coarser, so it had
+been returning its input unchanged.
+
+Re-measured on the 15-minute data the library actually uses:
+
+| | Netherlands | Seville |
+|---|---|---|
+| energy | +0.05 % | +0.09 % |
+| instantaneous power RMS | 13.8 W (0.60 %) | 17.7 W (0.66 %) |
+| max power deviation | 126 W | 66 W |
+| max cell temp deviation | 7.9 °C | 4.2 °C |
+
+So it is negligible for energy but real for instantaneous power under broken
+cloud. It is applied only to `watts`; over an interval average the lag cancels.
+
+**Gap hazard.** `prilliman` raises `NotImplementedError` on unequal time
+intervals, and `_drop_null_entries` routinely creates gaps — 24 % of raw
+intervals were dropped in one measurement. Smoothing is therefore applied per
+contiguous uniform run.
+
+### Measured effect of Tier 3, identical cached payloads, 5 kWp / 4.5 kW AC
+
+| Site | Energy | Peak power |
+|---|---|---|
+| Netherlands | −1.20 % | −2.70 % |
+| Oslo | −0.94 % | −2.51 % |
+| Seville | −1.69 % | −3.40 % |
+| Denver | −2.46 % | −3.47 % |
+| Sydney | **+1.01 %** | −0.64 % |
+
+Denver moves most, being dry and at 1612 m so the pressure-corrected airmass
+bites. Sydney gains, being in humid southern-hemisphere winter.
+
+### Known pre-existing flaw, not addressed here
+
+When the horizon blocks the sun, the shaded branch substitutes raw *horizontal*
+diffuse irradiance for plane-of-array irradiance. For a tilted array the POA
+diffuse component is smaller than horizontal DHI, so enabling `use_horizon` can
+*raise* predicted output rather than lower it — 872.8 kWh versus 868.6 kWh
+unshaded in one Oslo run. This behaviour is unchanged by Tier 3 (it reproduces
+identically before and after), but it is wrong and worth a separate fix.
 
 ---
 
@@ -290,7 +368,7 @@ loader uses a semaphore and backs off on HTTP 429.
 | 1.2 inverter efficiency curve | ✅ implemented |
 | 1.3 NREL snow coverage | ✅ implemented |
 | 2.1 multi-model ensemble | ✅ implemented |
-| 3.1–3.4 second-order physics | ⬜ pending |
+| 3.1–3.4 second-order physics | ✅ implemented |
 | 2.2 pre-trained MOS | ⬜ pending; ship opt-in until the Munich regression is understood |
 
 Tier 1 landed together under a version bump, since it visibly lowers everyone's

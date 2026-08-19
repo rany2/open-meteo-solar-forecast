@@ -97,6 +97,8 @@ def _fake_api_data() -> dict:
             "snow_depth": [0.0, 0.0],
             "temperature_2m": [t_amb, t_amb],
             "wind_speed_10m": [1.0, 1.0],
+            "relative_humidity_2m": [50.0, 50.0],
+            "surface_pressure": [1013.25, 1013.25],
         },
     }
 

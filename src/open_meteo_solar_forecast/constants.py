@@ -58,6 +58,50 @@ ETA_INV_NOM = 0.96
 ETA_INV_REF = 0.9637
 
 # --------------------------------------------------------------------------
+# Wind speed reference height
+# --------------------------------------------------------------------------
+# Open-Meteo reports wind at the meteorological standard of 10 m, but the
+# Faiman coefficients above were determined with wind measured near module
+# height. Feeding 10 m wind straight in overestimates convective cooling and
+# so under-predicts cell temperature.
+#
+# The obvious fix - a power-law wind profile - is the wrong tool. pvlib's
+# maintainers and Driesse specifically caution that such profiles "are not
+# applicable close to the ground or close to the level of the objects that
+# contribute to the roughness", which is exactly where PV modules live.
+#
+# Instead we use a fixed empirical reduction. Driesse surveys the literature
+# for 10 m -> 2 m (a nominal array height) and reports ratios of 0.51, 0.56,
+# 0.67 and 0.725; this is their mean. The choice within that range is not
+# critical: across a full year the four values span only ~0.7 percentage
+# points of predicted energy.
+#
+# Source: Driesse et al. (2022), "PV Module Operating Temperature Model
+# Equivalence and Parameter Translation", NREL/OSTI 2003640.
+WIND_SPEED_10M_TO_MODULE = 0.616
+
+# --------------------------------------------------------------------------
+# Spectral response
+# --------------------------------------------------------------------------
+# Sunlight's spectrum shifts with water vapour and path length, and a module
+# responds to some wavelengths better than others. Crystalline silicon
+# dominates residential installations, so it is assumed here.
+SPECTRAL_MODULE_TYPE = "monosi"
+
+# --------------------------------------------------------------------------
+# Ground albedo
+# --------------------------------------------------------------------------
+# Snow-covered ground reflects far more light onto a tilted array than bare
+# ground does. Typical fresh-to-settled snow albedo is 0.6-0.9; 0.65 is a
+# conservative settled-snow value.
+SNOW_GROUND_ALBEDO = 0.65
+
+# Ground snow depth (m) beyond which the ground is treated as snow-covered for
+# albedo purposes. Note this is about light bouncing off the *ground*, and is
+# unrelated to snow sitting on the modules, which snow.py models separately.
+SNOW_ALBEDO_DEPTH_M = 0.02
+
+# --------------------------------------------------------------------------
 # Weather models
 # --------------------------------------------------------------------------
 # Averaging several numerical weather predictions cancels much of the

@@ -222,6 +222,29 @@ noticeably less efficient at 5% load than at 80%. Output saturates at the
 array nameplate, which applies a realistic efficiency curve without inventing a
 clipping threshold.
 
+**Wind speed height.** The cell-temperature model's coefficients were derived
+with wind measured near module height, but the API reports the meteorological
+standard of 10 m. Wind is therefore scaled by a fixed empirical factor before
+use. A wind-profile power law is deliberately *not* used: such profiles are not
+valid close to the ground, where modules actually sit. The factor is the mean of
+values reported in the literature; the spread between them is worth only about
+0.7 percentage points of annual energy.
+
+**Spectral response.** Modules are rated against the AM1.5 reference spectrum,
+but the real spectrum shifts with atmospheric water vapour and path length. The
+correction is small for silicon (within about ±2%) and is derived from
+temperature, humidity and pressure, all fetched automatically.
+
+**Ground albedo.** Snow-covered ground reflects far more light onto a tilted
+array than bare ground, so the albedo is raised automatically when snow is
+lying. This is distinct from snow *on the modules*, below.
+
+**Thermal inertia.** Modules have real thermal mass, so their temperature lags
+the conditions driving it. This barely affects total energy (~0.05%) but
+matters for instantaneous power under broken cloud, where the steady-state and
+lagged temperatures can differ by several degrees. It is applied only to
+`watts`, not to interval energy, where the lag averages out.
+
 **Snow.** Snow coverage is tracked *on the modules* using the NREL/Marion model:
 it accumulates during snowfall and slides off at a rate set by tilt,
 plane-of-array irradiance and air temperature. This matters because snow on the

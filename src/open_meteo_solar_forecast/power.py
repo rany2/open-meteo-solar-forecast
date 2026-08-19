@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
+import warnings
 from collections.abc import Mapping
 from datetime import datetime as dt
 
 import numpy
+import pandas as pd
 from pvlib import inverter, temperature
 
 from .constants import (
@@ -15,7 +18,13 @@ from .constants import (
     ETA_INV_REF,
     G_STC,
     TEMP_STC_CELL,
+    WIND_SPEED_10M_TO_MODULE,
 )
+
+_LOGGER = logging.getLogger(__name__)
+
+# Thermal-inertia smoothing needs a few consecutive samples to be meaningful.
+_MIN_INERTIA_RUN = 4
 
 
 def _quarter_hour_energy(
@@ -25,9 +34,113 @@ def _quarter_hour_energy(
     return {timestamp: power * 0.25 for timestamp, power in average_power.items()}
 
 
+def module_wind_speed(wind_10m: float) -> float:
+    """Convert a 10 m wind speed to the module-height value Faiman expects.
+
+    See ``WIND_SPEED_10M_TO_MODULE`` for why this is a fixed empirical ratio
+    rather than a wind-profile power law.
+    """
+    return wind_10m * WIND_SPEED_10M_TO_MODULE
+
+
 def cell_temperature(gti: float, t_amb: float, wind: float) -> float:
-    """Estimate the cell temperature with the Faiman model (IEC 61853)."""
+    """Estimate the cell temperature with the Faiman model (IEC 61853).
+
+    ``wind`` is expected at module height; see :func:`module_wind_speed`.
+    """
     return float(temperature.faiman(gti, t_amb, wind))
+
+
+def _uniform_runs(
+    index: pd.DatetimeIndex, min_length: int = _MIN_INERTIA_RUN
+) -> list[tuple[int, int]]:
+    """Split an index into ``[start, stop)`` runs of uniform spacing.
+
+    Rows with incomplete weather data are dropped upstream, so the series can
+    contain gaps. Several pvlib routines reject unequal intervals outright, so
+    callers work run by run instead.
+    """
+    n = len(index)
+    if n < min_length:
+        return []
+
+    deltas = index.to_series().diff().dt.total_seconds().to_numpy()
+    runs: list[tuple[int, int]] = []
+    start = 0
+    for i in range(2, n):
+        if deltas[i] != deltas[i - 1]:
+            if i - start >= min_length:
+                runs.append((start, i))
+            # The next run needs its own leading interval, so it begins on
+            # the previous sample.
+            start = i - 1
+    if n - start >= min_length:
+        runs.append((start, n))
+    return runs
+
+
+def cell_temperature_series(
+    times: pd.DatetimeIndex,
+    gti: list[float],
+    temp_air: list[float],
+    wind_module: list[float],
+    *,
+    thermal_inertia: bool = False,
+) -> numpy.ndarray:
+    """Cell temperature for a whole series, optionally with thermal inertia.
+
+    A module has real thermal mass, so its temperature lags the conditions
+    driving it. The steady-state Faiman model ignores that, which matters when
+    irradiance changes quickly: under broken cloud the two can differ by
+    several degrees at an individual timestep.
+
+    The effect on total energy is negligible (~0.05%) because the lag averages
+    out, so this is applied only to the instantaneous power series, where it
+    is physically meaningful.
+    """
+    poa = numpy.asarray(gti, dtype=float)
+    air = numpy.asarray(temp_air, dtype=float)
+    wind = numpy.asarray(wind_module, dtype=float)
+
+    steady = numpy.asarray(temperature.faiman(poa, air, wind), dtype=float)
+    if not thermal_inertia or len(times) < _MIN_INERTIA_RUN:
+        return steady
+
+    smoothed = steady.copy()
+    for start, stop in _uniform_runs(times):
+        span = times[start:stop]
+        with warnings.catch_warnings():
+            # pvlib declines to smooth intervals of 20 minutes or more and
+            # says so; leaving those unchanged is the correct outcome.
+            warnings.simplefilter("ignore")
+            try:
+                result = temperature.prilliman(
+                    pd.Series(steady[start:stop], index=span),
+                    pd.Series(wind[start:stop], index=span),
+                )
+            except (NotImplementedError, ValueError) as err:
+                _LOGGER.debug("Skipping thermal inertia for one run: %s", err)
+                continue
+        smoothed[start:stop] = numpy.nan_to_num(
+            result.to_numpy(), nan=steady[start:stop]
+        )
+    return smoothed
+
+
+def gen_power_at_temp(
+    gti: float, temp_cell: float, eff: float, dc_wp: float
+) -> int:
+    """DC power for an already-known cell temperature.
+
+    Same model as :func:`gen_power`, but takes the cell temperature as an
+    input so the whole series can be prepared in one vectorised pass.
+    """
+    power = dc_wp
+    power *= gti / G_STC
+    power *= 1 + ALPHA_TEMP * (temp_cell - TEMP_STC_CELL)
+    power *= eff
+    power *= DC_LOSS_FACTOR
+    return round(max(0, power))
 
 
 def gen_power(gti: float, t_amb: float, wind: float, eff: float, dc_wp: float) -> int:
