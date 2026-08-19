@@ -224,6 +224,13 @@ noticeably less efficient at 5% load than at 80%. Output saturates at the
 array nameplate, which applies a realistic efficiency curve without inventing a
 clipping threshold.
 
+**Low-light efficiency.** A module is not equally efficient at every light
+level. The plain irradiance-ratio formula assumes it is, which over-predicts in
+dim conditions — by about 14% at 50 W/m², 9% at 100 W/m² and 5% at 200 W/m²,
+closing to nothing above roughly 600 W/m². Output at standard test conditions
+is unchanged, so nameplate ratings still hold. Worth −0.8% annually in a sunny
+climate and −1.5% in a cloudy one, where far more energy arrives in dim light.
+
 **Wind speed height.** The cell-temperature model's coefficients were derived
 with wind measured near module height, but the API reports the meteorological
 standard of 10 m. Wind is therefore scaled by a fixed empirical factor before

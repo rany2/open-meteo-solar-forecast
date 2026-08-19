@@ -53,6 +53,7 @@ from .power import (
     hourly_average_power,
     inverter_ac_power,
     inverter_dc_input_limit,
+    irradiance_efficiency,
     module_wind_speed,
 )
 from .snow import snow_dc_loss
@@ -79,6 +80,8 @@ class _ArraySeries(NamedTuple):
     snow_loss: numpy.ndarray
     tcell_avg: numpy.ndarray
     tcell_inst: numpy.ndarray
+    eta_irr_avg: numpy.ndarray
+    eta_irr_inst: numpy.ndarray
     dc_wp: float
     pdc0: float | None
 
@@ -692,6 +695,10 @@ class OpenMeteoSolarForecast:
             ),
             tcell_avg=tcell_avg,
             tcell_inst=tcell_inst,
+            # Modules are less efficient in dim light than the plain
+            # irradiance ratio implies.
+            eta_irr_avg=irradiance_efficiency(irr_avg_arr),
+            eta_irr_inst=irradiance_efficiency(irr_inst_arr),
             dc_wp=dc_wp,
             # Per-array inverter (only when per-array capacities are given; a
             # shared inverter converts the combined DC output later).
@@ -787,13 +794,19 @@ class OpenMeteoSolarForecast:
 
             dc_avg = (
                 gen_power_at_temp(
-                    s.irr_avg[i], s.tcell_avg[i], eff_damped, s.dc_wp
+                    s.irr_avg[i],
+                    s.tcell_avg[i],
+                    eff_damped * s.eta_irr_avg[i],
+                    s.dc_wp,
                 )
                 * snow_factor
             )
             dc_inst = (
                 gen_power_at_temp(
-                    s.irr_inst[i], s.tcell_inst[i], eff_damped, s.dc_wp
+                    s.irr_inst[i],
+                    s.tcell_inst[i],
+                    eff_damped * s.eta_irr_inst[i],
+                    s.dc_wp,
                 )
                 * snow_factor
             )

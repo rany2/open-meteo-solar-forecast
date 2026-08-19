@@ -9,9 +9,10 @@ from datetime import datetime as dt
 
 import numpy
 import pandas as pd
-from pvlib import inverter, temperature
+from pvlib import inverter, pvarray, temperature
 
 from .constants import (
+    ADR_PARAMS,
     ALPHA_TEMP,
     DC_LOSS_FACTOR,
     ETA_INV_NOM,
@@ -23,6 +24,19 @@ from .constants import (
 
 _LOGGER = logging.getLogger(__name__)
 
+# The ADR curve does not pass exactly through 1.0 at STC, so every value is
+# divided by its STC value. Without this, an array at 1000 W/m2 and 25 C would
+# no longer produce precisely its nameplate rating.
+_ADR_AT_STC = float(
+    numpy.asarray(
+        pvarray.pvefficiency_adr(G_STC, TEMP_STC_CELL, **ADR_PARAMS), dtype=float
+    )
+)
+
+# Well above any terrestrial plane-of-array irradiance, including the strongest
+# cloud-edge enhancement. Guards the efficiency model against overflow.
+_MAX_IRRADIANCE = 2000.0
+
 # Thermal-inertia smoothing needs a few consecutive samples to be meaningful.
 _MIN_INERTIA_RUN = 4
 
@@ -32,6 +46,47 @@ def _quarter_hour_energy(
 ) -> dict[dt, float]:
     """Convert PT15M average power to energy for each exact interval."""
     return {timestamp: power * 0.25 for timestamp, power in average_power.items()}
+
+
+def irradiance_efficiency(gti: numpy.ndarray | list[float]) -> numpy.ndarray:
+    """Relative module efficiency at a given irradiance, 1.0 at STC.
+
+    The plain ``P = Pmax * (G / Gstc) * ...`` formula treats a module as
+    equally efficient in twilight as at noon. Real modules fall away in dim
+    light, chiefly through shunt-resistance losses, and sag slightly again
+    above 1000 W/m2 through series resistance:
+
+    ======  ==========
+    W/m2    efficiency
+    ======  ==========
+    50      0.860
+    100     0.907
+    200     0.949
+    400     0.982
+    1000    1.000
+    1400    0.993
+    ======  ==========
+
+    Only the irradiance dependence is taken; the factor is evaluated at STC
+    cell temperature so the caller's own temperature term is untouched. See
+    ``ADR_PARAMS`` for why that separation matters.
+    """
+    irradiance = numpy.asarray(gti, dtype=float)
+    # Negative irradiance makes the model return NaN and infinities make it
+    # overflow, so clamp to a physically sane range first. Zero is legitimate
+    # at night, where efficiency is irrelevant because output is zero anyway.
+    safe = numpy.clip(
+        numpy.nan_to_num(irradiance, nan=0.0, posinf=_MAX_IRRADIANCE, neginf=0.0),
+        0.0,
+        _MAX_IRRADIANCE,
+    )
+
+    with numpy.errstate(over="ignore", invalid="ignore", divide="ignore"):
+        factor = numpy.asarray(
+            pvarray.pvefficiency_adr(safe, TEMP_STC_CELL, **ADR_PARAMS), dtype=float
+        )
+    factor = numpy.nan_to_num(factor, nan=0.0) / _ADR_AT_STC
+    return numpy.clip(factor, 0.0, 1.0)
 
 
 def module_wind_speed(wind_10m: float) -> float:

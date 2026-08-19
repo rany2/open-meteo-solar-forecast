@@ -12,7 +12,7 @@ Completed work and its measurements live in [ACCURACY.md](ACCURACY.md).
 
 | # | Recommendation | Expected gain | Scope | Status |
 |---|---|---|---|---|
-| 1 | Irradiance-dependent (low-light) efficiency | 0.9–2.3 % | all users | in progress |
+| 1 | Irradiance-dependent (low-light) efficiency | 0.8–1.5 % | all users | **done** |
 | 2 | Horizon sky-view factor for diffuse | unquantified | `use_horizon` users | open |
 | 3 | Satellite-observed irradiance for the recent past | large for "now" | regional | open |
 | 4 | Trimmed-mean ensemble instead of mean | ~0.8 % | all users | deferred |
@@ -22,7 +22,23 @@ Completed work and its measurements live in [ACCURACY.md](ACCURACY.md).
 
 ## 1. Irradiance-dependent (low-light) efficiency
 
-**Status:** in progress.
+**Status:** done. See `irradiance_efficiency` in `power.py`.
+
+Measured on identical cached payloads, 5 kWp / 4.5 kW AC over 67 days:
+
+| Site | Before | After | Change |
+|---|---|---|---|
+| Seville | 1884.7 kWh | 1869.2 kWh | −0.82 % |
+| Denver | 1737.3 kWh | 1718.9 kWh | −1.06 % |
+| Netherlands | 1816.5 kWh | 1794.5 kWh | −1.21 % |
+| Sydney | 1309.0 kWh | 1292.7 kWh | −1.25 % |
+| Oslo | 1720.9 kWh | 1695.7 kWh | −1.46 % |
+
+Ordered exactly as predicted: sunniest climate least affected, cloudiest most.
+
+A deliberately mis-oriented array (south-facing in the southern hemisphere,
+collecting almost pure diffuse) showed −9.6 %, which is a useful sanity check
+that the correction bites hardest exactly where the light is dimmest.
 
 The DC model is linear in irradiance:
 

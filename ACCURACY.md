@@ -404,6 +404,7 @@ loader uses a semaphore and backs off on HTTP 429.
 | 2.1 multi-model ensemble | ✅ implemented |
 | 3.1–3.4 second-order physics | ✅ implemented |
 | horizon shading monotonicity | ✅ fixed |
+| low-light efficiency | ✅ implemented (see RECOMMENDATIONS.md #1) |
 | 2.2 pre-trained MOS | ⬜ pending; ship opt-in until the Munich regression is understood |
 
 Tier 1 landed together under a version bump, since it visibly lowers everyone's

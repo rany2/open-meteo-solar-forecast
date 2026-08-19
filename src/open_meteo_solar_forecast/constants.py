@@ -58,6 +58,35 @@ ETA_INV_NOM = 0.96
 ETA_INV_REF = 0.9637
 
 # --------------------------------------------------------------------------
+# Irradiance-dependent efficiency
+# --------------------------------------------------------------------------
+# A module is not equally efficient at every light level. The bare
+# P = Pmax * (G / Gstc) * ... formula assumes it is, which over-predicts in dim
+# conditions: at 50 W/m2 a crystalline-silicon module runs about 14% below its
+# STC-relative efficiency, and the shortfall only closes above ~600 W/m2.
+#
+# These are the ADR model parameters from pvlib's own worked example, fitted to
+# an IEC 61853-1 measurement matrix for a crystalline-silicon module. They
+# describe a module class rather than any particular installation, so no
+# site calibration is involved.
+#
+# Only the *irradiance* dependence is taken from this model. ADR also carries a
+# temperature term, and its implied coefficient (-0.0029 to -0.0033 /C) differs
+# from ALPHA_TEMP above. Adopting the model wholesale would silently replace
+# the documented temperature model, so the factor is always evaluated at
+# TEMP_STC_CELL and the existing temperature term is left to do its job.
+#
+# Source: A. Driesse and J. S. Stein, "From IEC 61853 power measurements to PV
+# system simulations", Sandia Report SAND2020-3877, 2020.
+ADR_PARAMS = {
+    "k_a": 0.99924,
+    "k_d": -5.49097,
+    "tc_d": 0.01918,
+    "k_rs": 0.06999,
+    "k_rsh": 0.26144,
+}
+
+# --------------------------------------------------------------------------
 # Wind speed reference height
 # --------------------------------------------------------------------------
 # Open-Meteo reports wind at the meteorological standard of 10 m, but the

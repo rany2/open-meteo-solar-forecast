@@ -1,6 +1,6 @@
 [project]
 name = "open-meteo-solar-forecast"
-version = "0.5.0"
+version = "0.6.0"
 description = "Asynchronous Python client for getting forecast solar information"
 authors = [
     { name = "Rany", email = "rany@riseup.net" },
