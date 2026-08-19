@@ -269,9 +269,32 @@ class OpenMeteoSolarForecast:
             params=params,
         )
 
+    @staticmethod
+    def _drop_null_entries(minutely: dict[str, list[Any]]) -> dict[str, list[Any]]:
+        """Remove timestamps where any weather variable is null.
+
+        The API may return null for some variables (typically at the far end
+        of the forecast horizon or for past data gaps). Since every variable
+        is required for the forecast generation, drop those timestamps
+        entirely so all arrays stay aligned.
+        """
+        keys = list(minutely.keys())
+        valid_idx = [
+            i
+            for i in range(len(minutely["time"]))
+            if all(minutely[key][i] is not None for key in keys)
+        ]
+        if len(valid_idx) == len(minutely["time"]):
+            return minutely
+        if not valid_idx:
+            raise OpenMeteoSolarForecastError(
+                "API returned no complete data points"
+            )
+        return {key: [minutely[key][i] for i in valid_idx] for key in keys}
+
     def _prepare_weather(self, data: Any, tz: timezone) -> dict[str, Any]:
         """Prepare location-wide weather and solar geometry shared by all arrays."""
-        minutely = data["minutely_15"]
+        minutely = self._drop_null_entries(data["minutely_15"])
 
         time_arr = [
             dt.fromtimestamp(ts, UTC).astimezone(tz)
