@@ -3,13 +3,16 @@
 import asyncio
 import dataclasses  # noqa
 from datetime import timedelta
+from pathlib import Path
 from pprint import pprint  # noqa
 from open_meteo_solar_forecast import OpenMeteoSolarForecast
 import numpy
 
+EXAMPLES_DIR = Path(__file__).resolve().parent
+
 async def main() -> None:
     
-    horizon_data = numpy.genfromtxt("horizon.txt", delimiter="\t", dtype=float)
+    horizon_data = numpy.genfromtxt(EXAMPLES_DIR / "horizon.txt", delimiter="\t", dtype=float)
     hm = tuple([tuple(row) for row in horizon_data])
     
     """Get an estimate from the Forecast.Solar API."""
@@ -70,7 +73,8 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    event_loop = asyncio.get_event_loop()
-    asyncio.ensure_future(main(),loop=event_loop)
-    #asyncio.run(main())
-    
+    try:
+        asyncio.run(main())
+    except RuntimeError:
+        asyncio.ensure_future(main())
+
