@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import math
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, timedelta, timezone
@@ -10,8 +12,16 @@ from typing import Any, Self
 
 import numpy
 import pandas as pd
-from aiohttp import ClientSession
+from aiohttp import ClientError, ClientSession, ClientTimeout
 
+from .cache import (
+    SECONDS_PER_DAY,
+    CacheEntry,
+    ResponseCache,
+    fingerprint,
+    merge_series,
+    prune_before,
+)
 from .exceptions import (
     OpenMeteoSolarForecastAuthenticationError,
     OpenMeteoSolarForecastConfigError,
@@ -49,6 +59,8 @@ from .sun import (
 
 __all__ = ["OpenMeteoSolarForecast", "_quarter_hour_energy"]
 
+_LOGGER = logging.getLogger(__name__)
+
 
 @dataclass
 class OpenMeteoSolarForecast:
@@ -76,6 +88,10 @@ class OpenMeteoSolarForecast:
     horizon_map: tuple(tuple(float)) | list[tuple(tuple(float))] = ((0.0,20.0),(360.0,20.0))
     max_snowcover_depth_cm: float | list[float] = 0.0
     albedo: float | list[float] = 0.25
+    cache_path: str | None = None
+    cache_prune: bool = True
+    cache_max_age: float | None = None
+    request_timeout: float = 15.0
 
     session: ClientSession | None = None
     _close_session: bool = False
@@ -198,6 +214,7 @@ class OpenMeteoSolarForecast:
             "GET",
             self.base_url + uri,
             params=params,
+            timeout=ClientTimeout(total=self.request_timeout),
         )
 
         self._raise_for_response_status(response.status)
@@ -249,25 +266,127 @@ class OpenMeteoSolarForecast:
         values = zip(*(getattr(self, name) for name in names), strict=True)
         return [dict(zip(names, row, strict=True)) for row in values]
 
-    async def _fetch_forecast(self) -> Any:
-        params = {
+    MINUTELY_15_VARS = (
+        "temperature_2m"
+        ",shortwave_radiation,shortwave_radiation_instant"
+        ",diffuse_radiation,diffuse_radiation_instant"
+        ",direct_normal_irradiance,direct_normal_irradiance_instant"
+        ",snow_depth,wind_speed_10m"
+    )
+
+    def _forecast_params(self, past_days: int) -> dict[str, str]:
+        return {
             "latitude": str(self.latitude),
             "longitude": str(self.longitude),
-            "minutely_15": "temperature_2m"
-            ",shortwave_radiation,shortwave_radiation_instant"
-            ",diffuse_radiation,diffuse_radiation_instant"
-            ",direct_normal_irradiance,direct_normal_irradiance_instant"
-            ",snow_depth,wind_speed_10m",
+            "minutely_15": self.MINUTELY_15_VARS,
             "wind_speed_unit": "ms",
             "forecast_days": str(self.forecast_days),
-            "past_days": str(self.past_days),
+            "past_days": str(past_days),
             "timezone": "auto",
             "timeformat": "unixtime",
         }
-        return await self._request(
-            "/v1/forecast",
-            params=params,
+
+    def _cache_fingerprint(self) -> str:
+        """Fingerprint of every parameter that must invalidate the cache."""
+        return fingerprint(
+            {
+                "latitude": str(self.latitude),
+                "longitude": str(self.longitude),
+                "minutely_15": self.MINUTELY_15_VARS,
+                "wind_speed_unit": "ms",
+                "timeformat": "unixtime",
+                "base_url": self.base_url,
+                "weather_model": self.weather_model,
+            }
         )
+
+    def _window_start(self, now_ts: float, utc_offset: int) -> float:
+        """Timestamp of local midnight ``past_days`` ago (API window start)."""
+        local_now = now_ts + utc_offset
+        local_midnight = local_now - (local_now % SECONDS_PER_DAY)
+        return local_midnight - self.past_days * SECONDS_PER_DAY - utc_offset
+
+    async def _fetch_forecast(self) -> Any:
+        if self.cache_path is None:
+            return await self._request(
+                "/v1/forecast",
+                params=self._forecast_params(self.past_days),
+            )
+        return await self._fetch_forecast_cached()
+
+    async def _fetch_forecast_cached(self) -> Any:
+        """Fetch the forecast, reusing cached past data where possible.
+
+        If ``cache_max_age`` is set and the cache was refreshed within
+        that many seconds, the API is not contacted at all and the
+        cached data is served directly. Otherwise, when the cache
+        already covers the requested past window, only the days elapsed
+        since the last refresh are re-requested and merged into the
+        cached series. On retryable request failures the cached data is
+        served instead of raising.
+        """
+        cache = ResponseCache(self.cache_path)
+        params_hash = self._cache_fingerprint()
+        entry = cache.read(params_hash)
+        now_ts = dt.now(UTC).timestamp()
+
+        if (
+            entry is not None
+            and self.cache_max_age is not None
+            and now_ts - entry.refreshed_at < self.cache_max_age
+        ):
+            _LOGGER.debug(
+                "Cache is fresh (refreshed at %s, max age %ss); "
+                "skipping API request",
+                dt.fromtimestamp(entry.refreshed_at, UTC).isoformat(),
+                self.cache_max_age,
+            )
+            return prune_before(
+                entry.data, self._window_start(now_ts, entry.utc_offset)
+            )
+
+        past_days = self.past_days
+        if entry is not None and entry.times[0] <= self._window_start(
+            now_ts, entry.utc_offset
+        ):
+            # Cache spans the whole past window: only re-request the
+            # days that went stale since the last refresh.
+            stale = max(0.0, now_ts - entry.refreshed_at)
+            past_days = min(self.past_days, math.ceil(stale / SECONDS_PER_DAY))
+
+        try:
+            data = await self._request(
+                "/v1/forecast",
+                params=self._forecast_params(past_days),
+            )
+        except (OpenMeteoSolarForecastError, ClientError, TimeoutError) as err:
+            if entry is None or not getattr(err, "retryable", True):
+                raise
+            _LOGGER.warning(
+                "Open-Meteo request failed (%s); falling back to cache "
+                "refreshed at %s",
+                err,
+                dt.fromtimestamp(entry.refreshed_at, UTC).isoformat(),
+            )
+            return prune_before(
+                entry.data, self._window_start(now_ts, entry.utc_offset)
+            )
+
+        if entry is not None:
+            data = merge_series(entry.data, data)
+        trimmed = prune_before(
+            data, self._window_start(now_ts, data.get("utc_offset_seconds", 0))
+        )
+
+        cache.write(
+            params_hash,
+            CacheEntry(
+                data=trimmed if self.cache_prune else data,
+                refreshed_at=now_ts,
+            ),
+        )
+
+        return trimmed
 
     @staticmethod
     def _drop_null_entries(minutely: dict[str, list[Any]]) -> dict[str, list[Any]]:

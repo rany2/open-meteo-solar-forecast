@@ -96,6 +96,10 @@ if __name__ == "__main__":
 | `partial_shading` | `bool \| list[bool] \| tuple[bool, ...]` | Whether to use interpret horizon shading as partial [experimental] (optional, default = False) |
 | `horizon_map` | `tuple of 2-tuples \| list[tuple of 2-tuples]` | Map of the horizon* (required if use_horizon = True) |
 | `max_snowcover_depth_cm` | `float \| list[float] \| tuple[float, ...]` | Critical snow coverage (cm) resulting in zero panel power [experimental] (required, default = 0.0 turns this off) |
+| `cache_path` | `str` | Path to a file used to cache API responses between runs (optional, default = no caching) |
+| `cache_prune` | `bool` | Whether to drop cached data older than the past window from disk (optional, default = True) |
+| `cache_max_age` | `float` | Serve cached data without calling the API if the cache is younger than this many seconds (optional, default = always refresh) |
+| `request_timeout` | `float` | Timeout in seconds for API requests (optional, default = 15.0) |
 
 ### Multiple PV arrays
 
