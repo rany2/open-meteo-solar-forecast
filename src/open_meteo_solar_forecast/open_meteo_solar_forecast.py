@@ -65,8 +65,8 @@ class OpenMeteoSolarForecast:
     azimuth: float | list[float]
     declination: float | list[float]
     dc_kwp: float | list[float]
-    latitude: float | list[float]
-    longitude: float | list[float]
+    latitude: float
+    longitude: float
 
     past_days: int = 92
     forecast_days: int = 16
@@ -98,12 +98,16 @@ class OpenMeteoSolarForecast:
         self._normalize_optional_params()
 
     def _normalize_required_params(self) -> None:
+        for attr_name in ("latitude", "longitude"):
+            if is_list_like(getattr(self, attr_name)):
+                raise OpenMeteoSolarForecastConfigError(
+                    f"{attr_name} must be a single value shared by all arrays"
+                )
+
         required_attr_names = (
             "azimuth",
             "declination",
             "dc_kwp",
-            "latitude",
-            "longitude",
         )
         required_values = [
             getattr(self, attr_name) for attr_name in required_attr_names
@@ -236,8 +240,6 @@ class OpenMeteoSolarForecast:
             "azimuth",
             "declination",
             "dc_kwp",
-            "latitude",
-            "longitude",
             "efficiency_factor",
             "tracking",
             "damping_morning",
@@ -251,10 +253,10 @@ class OpenMeteoSolarForecast:
         values = zip(*(getattr(self, name) for name in names), strict=True)
         return [dict(zip(names, row, strict=True)) for row in values]
 
-    async def _fetch_forecast(self, array: dict[str, Any]) -> Any:
+    async def _fetch_forecast(self) -> Any:
         params = {
-            "latitude": str(array["latitude"]),
-            "longitude": str(array["longitude"]),
+            "latitude": str(self.latitude),
+            "longitude": str(self.longitude),
             "minutely_15": "temperature_2m"
             ",shortwave_radiation,shortwave_radiation_instant"
             ",diffuse_radiation,diffuse_radiation_instant"
@@ -270,11 +272,38 @@ class OpenMeteoSolarForecast:
             params=params,
         )
 
+    def _prepare_weather(self, data: Any, tz: timezone) -> dict[str, Any]:
+        """Prepare location-wide weather and solar geometry shared by all arrays."""
+        minutely = data["minutely_15"]
+
+        time_arr = [
+            dt.fromtimestamp(ts, UTC).astimezone(tz)
+            for ts in minutely["time"]
+        ]
+
+        # Averaged values cover the preceding 15 minutes; use the interval
+        # midpoint for their solar position.
+        times_inst = pd.to_datetime(minutely["time"], unit="s", utc=True)
+        times_avg = times_inst - pd.Timedelta(minutes=7.5)
+
+        daily_dates = sorted({t.date() for t in time_arr})
+        sunrise_dict, sunset_dict = build_sun_times(
+            daily_dates, self.latitude, self.longitude, tz
+        )
+
+        return {
+            "minutely": minutely,
+            "time_arr": time_arr,
+            "solpos_inst": solar_position(times_inst, self.latitude, self.longitude),
+            "solpos_avg": solar_position(times_avg, self.latitude, self.longitude),
+            "sunrise": sunrise_dict,
+            "sunset": sunset_dict,
+        }
+
     def _accumulate_array_power(
         self,
         array: dict[str, Any],
-        data: Any,
-        tz: timezone,
+        weather: dict[str, Any],
         w_avg: dict[dt, int],
         w_inst: dict[dt, int],
     ) -> None:
@@ -287,7 +316,7 @@ class OpenMeteoSolarForecast:
             global horizontal irr. (GHI): sum of diffuse and direct sunlight collected on a horizontal plane (tilt = 0°)
             global tilted irr. (GTI): sum of diffuse and direct sunlight collected on a tilted plane
         """
-        minutely = data["minutely_15"]
+        minutely = weather["minutely"]
         ghi_avg_arr = minutely["shortwave_radiation"]
         ghi_inst_arr = minutely["shortwave_radiation_instant"]
         dhi_avg_arr = minutely["diffuse_radiation"]
@@ -297,20 +326,11 @@ class OpenMeteoSolarForecast:
         snow_depth_arr = minutely["snow_depth"]
         temp_arr = minutely["temperature_2m"]
 
-        time_arr = [
-            dt.fromtimestamp(ts, UTC).astimezone(tz)
-            for ts in minutely["time"]
-        ]
-
-        lat = array["latitude"]
-        lon = array["longitude"]
-
-        # Averaged values cover the preceding 15 minutes; use the interval
-        # midpoint for their solar position.
-        times_inst = pd.to_datetime(minutely["time"], unit="s", utc=True)
-        times_avg = times_inst - pd.Timedelta(minutes=7.5)
-        solpos_inst = solar_position(times_inst, lat, lon)
-        solpos_avg = solar_position(times_avg, lat, lon)
+        time_arr = weather["time_arr"]
+        solpos_inst = weather["solpos_inst"]
+        solpos_avg = weather["solpos_avg"]
+        sunrise_dict = weather["sunrise"]
+        sunset_dict = weather["sunset"]
 
         gti_avg_arr = compute_gti(
             solpos_avg, ghi_avg_arr, dhi_avg_arr, dni_avg_arr, array
@@ -318,9 +338,6 @@ class OpenMeteoSolarForecast:
         gti_inst_arr = compute_gti(
             solpos_inst, ghi_inst_arr, dhi_inst_arr, dni_inst_arr, array
         ).tolist()
-
-        daily_dates = sorted({t.date() for t in time_arr})
-        sunrise_dict, sunset_dict = build_sun_times(daily_dates, lat, lon, tz)
 
         damping_factors = [
             calculate_damping_coefficient(
@@ -446,20 +463,12 @@ class OpenMeteoSolarForecast:
         w_inst: dict[dt, int] = defaultdict(int)
         wh_days: dict[dt, int] = defaultdict(int)
 
-        utc_offset = None
-        tz = None
+        data = await self._fetch_forecast()
+        tz = timezone(timedelta(seconds=data["utc_offset_seconds"]))
+        weather = self._prepare_weather(data, tz)
+
         for array in self._array_params():
-            data = await self._fetch_forecast(array)
-
-            if utc_offset is None:
-                utc_offset = data["utc_offset_seconds"]
-            elif utc_offset != data["utc_offset_seconds"]:
-                raise OpenMeteoSolarForecastConfigError(
-                    "The UTC offset is not the same for all locations"
-                )
-            tz = timezone(timedelta(seconds=utc_offset))
-
-            self._accumulate_array_power(array, data, tz, w_avg, w_inst)
+            self._accumulate_array_power(array, weather, w_avg, w_inst)
 
         self._clamp_to_inverter(w_avg, w_inst)
 

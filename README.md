@@ -99,14 +99,15 @@ if __name__ == "__main__":
 
 ### Multiple PV arrays
 
-To calculate a combined forecast from multiple arrays, pass per-array values as
-lists or tuples for the required parameters (`latitude`, `longitude`,
-`declination`, `azimuth`, and `dc_kwp`).
+To calculate a combined forecast from multiple arrays at the same location,
+pass per-array values as lists or tuples for the required parameters
+(`declination`, `azimuth`, and `dc_kwp`). `latitude` and `longitude` are
+shared by all arrays, so the weather data is fetched only once.
 
 ```python
 async with OpenMeteoSolarForecast(
-    latitude=[52.16, 52.16],
-    longitude=[4.47, 4.47],
+    latitude=52.16,
+    longitude=4.47,
     declination=[20, 35],
     azimuth=[-90, 90],  # east and west (0 = south, -90 = east, 90 = west)
     dc_kwp=[2.4, 1.8],
@@ -133,8 +134,8 @@ inverter capacity before the outputs are combined:
 
 ```python
 async with OpenMeteoSolarForecast(
-    latitude=[52.16, 52.16],
-    longitude=[4.47, 4.47],
+    latitude=52.16,
+    longitude=4.47,
     declination=[20, 35],
     azimuth=[-90, 90],
     dc_kwp=[2.4, 1.8],

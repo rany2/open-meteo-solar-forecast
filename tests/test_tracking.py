@@ -14,8 +14,8 @@ class TrackingConfigTests(unittest.TestCase):
     def test_default_and_per_array_tracking(self) -> None:
         """Normalize tracking like other per-array parameters."""
         forecast = OpenMeteoSolarForecast(
-            latitude=[48.0, 48.0],
-            longitude=[11.0, 11.0],
+            latitude=48.0,
+            longitude=11.0,
             declination=[20, 30],
             azimuth=[0, 0],
             dc_kwp=[1.0, 2.0],
@@ -23,8 +23,8 @@ class TrackingConfigTests(unittest.TestCase):
         assert forecast.tracking == ["none", "none"]
 
         forecast = OpenMeteoSolarForecast(
-            latitude=[48.0, 48.0],
-            longitude=[11.0, 11.0],
+            latitude=48.0,
+            longitude=11.0,
             declination=[20, 30],
             azimuth=[0, 0],
             dc_kwp=[1.0, 2.0],
