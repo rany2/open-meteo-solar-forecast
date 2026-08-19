@@ -298,14 +298,48 @@ contiguous uniform run.
 Denver moves most, being dry and at 1612 m so the pressure-corrected airmass
 bites. Sydney gains, being in humid southern-hemisphere winter.
 
-### Known pre-existing flaw, not addressed here
+## Horizon shading could increase output  ✅ FIXED
 
-When the horizon blocks the sun, the shaded branch substitutes raw *horizontal*
-diffuse irradiance for plane-of-array irradiance. For a tilted array the POA
-diffuse component is smaller than horizontal DHI, so enabling `use_horizon` can
-*raise* predicted output rather than lower it — 872.8 kWh versus 868.6 kWh
-unshaded in one Oslo run. This behaviour is unchanged by Tier 3 (it reproduces
-identically before and after), but it is wrong and worth a separate fix.
+When the horizon blocked the sun, the shaded branch substituted raw
+*horizontal* diffuse irradiance for the plane-of-array value. For a tilted
+array the horizontal figure is often the larger of the two, so a modest hill
+appeared to *add* energy. Oslo, 5 kWp at 40°, uniform skyline:
+
+| Horizon | Before | After |
+|---|---|---|
+| none | 1738.9 kWh | 1738.9 kWh |
+| 5° | 1740.4 (**+0.09 %**) | 1738.9 (+0.00 %) |
+| 10° | 1745.1 (**+0.36 %**) | 1738.8 (−0.01 %) |
+| 15° | 1749.6 (**+0.62 %**) | 1735.7 (−0.19 %) |
+| 25° | 1706.4 (−1.87 %) | 1666.0 (−4.19 %) |
+| 40° | 1338.5 (−23.03 %) | 1227.6 (−29.40 %) |
+| 60° | 597.6 (−65.63 %) | 366.3 (−78.94 %) |
+
+The fix assembles the plane-of-array irradiance from its components and builds
+an explicit *beam-blocked* value, which drops two things together:
+
+- the direct beam, and
+- the **circumsolar** part of sky diffuse — forward-scattered light arriving
+  from within a few degrees of the sun's disc. Whatever hides the sun hides
+  that halo too. It averages ~35 % of sky diffuse and reaches 79 % in clear
+  conditions, so omitting it was the larger half of the error.
+
+Isotropic sky, horizon brightening and ground reflection all survive, since
+they arrive from directions the obstruction does not cover. Because the shaded
+value is by construction a subset of the total, shading is now monotonic by
+construction, which `tests/test_horizon.py` asserts across skylines from 0° to
+80°.
+
+The shaded figures are now correctly *more* severe: at 60° the old model kept
+34 % of output, the corrected one keeps 21 %.
+
+Two guards on the rewrite: the assembled total is pinned against pvlib's own
+`get_total_irradiance` in a unit test, and unshaded production was verified
+bit-for-bit unchanged across five sites.
+
+Horizon shading is also now evaluated against the sun position each branch is
+built on — the interval midpoint for averages, the timestamp itself for
+instantaneous values — rather than using the instantaneous position for both.
 
 ---
 
@@ -369,6 +403,7 @@ loader uses a semaphore and backs off on HTTP 429.
 | 1.3 NREL snow coverage | ✅ implemented |
 | 2.1 multi-model ensemble | ✅ implemented |
 | 3.1–3.4 second-order physics | ✅ implemented |
+| horizon shading monotonicity | ✅ fixed |
 | 2.2 pre-trained MOS | ⬜ pending; ship opt-in until the Munich regression is understood |
 
 Tier 1 landed together under a version bump, since it visibly lowers everyone's

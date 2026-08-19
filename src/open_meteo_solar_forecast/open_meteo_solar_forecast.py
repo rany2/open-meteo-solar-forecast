@@ -58,6 +58,7 @@ from .power import (
 from .snow import snow_dc_loss
 from .spectral import spectral_factor
 from .sun import (
+    PlaneIrradiance,
     build_sun_times,
     check_horizon_shading,
     compute_gti,
@@ -605,20 +606,20 @@ class OpenMeteoSolarForecast:
         )
         array = {**array, "albedo": albedo}
 
-        gti_avg_arr = compute_gti(
+        plane_avg = compute_gti(
             weather["solpos_avg"],
             minutely["shortwave_radiation"],
             minutely["diffuse_radiation"],
             minutely["direct_normal_irradiance"],
             array,
-        ).to_numpy()
-        gti_inst_arr = compute_gti(
+        )
+        plane_inst = compute_gti(
             solpos_inst,
             minutely["shortwave_radiation_instant"],
             minutely["diffuse_radiation_instant"],
             minutely["direct_normal_irradiance_instant"],
             array,
-        ).to_numpy()
+        )
 
         sunrise_dict = weather["sunrise"]
         sunset_dict = weather["sunset"]
@@ -635,22 +636,27 @@ class OpenMeteoSolarForecast:
 
         if array["use_horizon"]:
             hmap_arr = numpy.array(array["horizon_map"]).T
-            horizon_shading = check_horizon_shading(solpos_inst, hmap_arr)
+            # Evaluate shading against the sun position each branch is built
+            # on: the interval midpoint for averages, the timestamp itself for
+            # instantaneous values.
+            shading_avg = check_horizon_shading(weather["solpos_avg"], hmap_arr)
+            shading_inst = check_horizon_shading(solpos_inst, hmap_arr)
         else:
-            horizon_shading = numpy.zeros(len(time_arr), dtype=bool)
+            shading_avg = numpy.zeros(len(time_arr), dtype=bool)
+            shading_inst = shading_avg
 
         irr_avg_arr = self._effective_irradiance(
-            gti_avg_arr,
+            plane_avg,
             minutely["shortwave_radiation"],
             minutely["diffuse_radiation"],
-            horizon_shading,
+            shading_avg,
             array,
         )
         irr_inst_arr = self._effective_irradiance(
-            gti_inst_arr,
+            plane_inst,
             minutely["shortwave_radiation_instant"],
             minutely["diffuse_radiation_instant"],
-            horizon_shading,
+            shading_inst,
             array,
         )
 
@@ -681,7 +687,9 @@ class OpenMeteoSolarForecast:
             irr_avg=irr_avg_arr,
             irr_inst=irr_inst_arr,
             damping=damping_factors,
-            snow_loss=self._array_snow_loss(array, weather, gti_avg_arr.tolist()),
+            snow_loss=self._array_snow_loss(
+                array, weather, plane_avg.total.to_numpy().tolist()
+            ),
             tcell_avg=tcell_avg,
             tcell_inst=tcell_inst,
             dc_wp=dc_wp,
@@ -696,7 +704,7 @@ class OpenMeteoSolarForecast:
 
     @staticmethod
     def _effective_irradiance(
-        gti: numpy.ndarray,
+        plane: PlaneIrradiance,
         ghi: list[float],
         dhi: list[float],
         horizon_shading: numpy.ndarray,
@@ -704,8 +712,13 @@ class OpenMeteoSolarForecast:
     ) -> numpy.ndarray:
         """Irradiance reaching the modules once horizon shading is applied.
 
-        When the horizon blocks the sun, only diffuse light is collected. With
-        ``partial_shading`` the diffuse contribution is further scaled by how
+        Where the horizon hides the sun the array falls back to the
+        beam-blocked plane-of-array value, which drops the direct beam and its
+        circumsolar halo but keeps isotropic sky, horizon brightening and
+        ground reflection. Because that is by construction a subset of the
+        unobstructed total, shading can only ever reduce output.
+
+        With ``partial_shading`` the remaining diffuse is scaled further by how
         diffuse the sky is overall.
 
         --- experimental empiric partial shading approach ---
@@ -715,24 +728,27 @@ class OpenMeteoSolarForecast:
         diffuse power. In between, the effect is assumed proportional.
         Inspired by https://pvlib-python.readthedocs.io/en/stable/gallery/shading/plot_partial_module_shading_simple.html#calculating-shading-loss-across-shading-scenarios
         """
+        total = plane.total.to_numpy()
         if not array["use_horizon"] or not horizon_shading.any():
-            return gti
+            return total
 
-        diffuse = numpy.asarray(dhi, dtype=float)
+        shaded = plane.beam_blocked.to_numpy()
         if array["partial_shading"]:
+            diffuse = numpy.asarray(dhi, dtype=float)
             direct = numpy.asarray(ghi, dtype=float) - diffuse
-            total = diffuse + direct
+            sky_total = diffuse + direct
             # Preferred over a plain diffuse/direct ratio, which collapses to
             # zero in morning and evening conditions where direct is zero.
             fraction = numpy.where(
-                total > 0,
-                numpy.clip(diffuse / numpy.where(total > 0, total, 1.0), 0.0, None),
+                sky_total > 0,
+                numpy.clip(
+                    diffuse / numpy.where(sky_total > 0, sky_total, 1.0), 0.0, None
+                ),
                 1.0,
             )
-        else:
-            fraction = 1.0
+            shaded = shaded * fraction
 
-        return numpy.where(horizon_shading, diffuse * fraction, gti)
+        return numpy.where(horizon_shading, shaded, total)
 
     def _accumulate_array_power(
         self,
