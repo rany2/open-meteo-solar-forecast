@@ -435,17 +435,32 @@ class OpenMeteoSolarForecast:
                 for ts in data["minutely_15"]["time"]
             ]
 
-            sunrise_times = [
-                dt.fromtimestamp(ts, timezone.utc).astimezone(tz)
-                for ts in data["daily"]["sunrise"]
+            # Key sunrise/sunset by the date of the daily "time" entry rather
+            # than the date of the sunrise/sunset timestamp itself. For large
+            # UTC offsets (e.g. UTC+13) the API can return sunrise/sunset
+            # timestamps that fall on an adjacent local day, which previously
+            # caused a KeyError for dates missing from the dicts (issue #45).
+            daily_dates = [
+                dt.fromtimestamp(ts, timezone.utc).astimezone(tz).date()
+                for ts in data["daily"]["time"]
             ]
-            sunrise_dict = {t.date(): t for t in sunrise_times}
 
-            sunset_times = [
-                dt.fromtimestamp(ts, timezone.utc).astimezone(tz)
-                for ts in data["daily"]["sunset"]
-            ]
-            sunset_dict = {t.date(): t for t in sunset_times}
+            def anchor_to_day(ts: int, day) -> dt:
+                """Convert a timestamp to tz and re-anchor it onto the given day."""
+                time = dt.fromtimestamp(ts, timezone.utc).astimezone(tz)
+                if time.date() != day:
+                    time = dt.combine(day, time.timetz())
+                return time
+
+            sunrise_dict = {
+                day: anchor_to_day(ts, day)
+                for day, ts in zip(daily_dates, data["daily"]["sunrise"], strict=True)
+            }
+
+            sunset_dict = {
+                day: anchor_to_day(ts, day)
+                for day, ts in zip(daily_dates, data["daily"]["sunset"], strict=True)
+            }
 
             damping_factors = [
                 calculate_damping_coefficient(
