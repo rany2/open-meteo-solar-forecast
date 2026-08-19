@@ -23,8 +23,9 @@ classifiers = [
 ]
 dependencies = [
     "aiohttp>=3.0.0,<4.0.0",
-    "suncalc>=0.1.0,<0.2.0",
     "numpy>=1.26.0,<3.0.0",
+    "pandas>=2.0.0",
+    "pvlib>=0.10.0",
     "pytz>=2024.1",
 ]
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, timedelta, timezone
@@ -9,6 +10,7 @@ from datetime import datetime as dt
 from typing import Any, Self
 
 import numpy
+import pandas as pd
 from aiohttp import ClientSession
 
 from .exceptions import (
@@ -38,9 +40,22 @@ from .power import (
     hourly_average_power,
     snowcover_factor,
 )
-from .sun import build_sun_times, check_horizon_shading
+from .sun import (
+    build_sun_times,
+    check_horizon_shading,
+    compute_gti,
+    solar_position,
+)
 
 __all__ = ["OpenMeteoSolarForecast", "_quarter_hour_energy"]
+
+
+def _is_missing(*values: float | None) -> bool:
+    """Check if any value is missing (None or NaN)."""
+    return any(
+        value is None or (isinstance(value, float) and math.isnan(value))
+        for value in values
+    )
 
 
 @dataclass
@@ -237,21 +252,14 @@ class OpenMeteoSolarForecast:
         return [dict(zip(names, row, strict=True)) for row in values]
 
     async def _fetch_forecast(self, array: dict[str, Any]) -> Any:
-        # The API interprets "nan" as a tracked axis: azimuth=nan is a
-        # vertical-axis (east-west) tracker, tilt=nan a tilt-axis tracker.
-        tracking = array["tracking"]
         params = {
             "latitude": str(array["latitude"]),
             "longitude": str(array["longitude"]),
-            "azimuth": "nan"
-            if tracking in ("azimuth", "dual")
-            else str(array["azimuth"]),
-            "tilt": "nan"
-            if tracking in ("tilt", "dual")
-            else str(array["declination"]),
             "minutely_15": "temperature_2m"
-            ",global_tilted_irradiance,global_tilted_irradiance_instant,diffuse_radiation,diffuse_radiation_instant,direct_radiation,direct_radiation_instant,snow_depth",
-            "daily": "sunrise,sunset",
+            ",shortwave_radiation,shortwave_radiation_instant"
+            ",diffuse_radiation,diffuse_radiation_instant"
+            ",direct_normal_irradiance,direct_normal_irradiance_instant"
+            ",snow_depth",
             "forecast_days": str(self.forecast_days),
             "past_days": str(self.past_days),
             "timezone": "auto",
@@ -280,12 +288,12 @@ class OpenMeteoSolarForecast:
             global tilted irr. (GTI): sum of diffuse and direct sunlight collected on a tilted plane
         """
         minutely = data["minutely_15"]
-        gti_avg_arr = minutely["global_tilted_irradiance"]
-        gti_inst_arr = minutely["global_tilted_irradiance_instant"]
+        ghi_avg_arr = minutely["shortwave_radiation"]
+        ghi_inst_arr = minutely["shortwave_radiation_instant"]
         dhi_avg_arr = minutely["diffuse_radiation"]
         dhi_inst_arr = minutely["diffuse_radiation_instant"]
-        dr_avg_arr = minutely["direct_radiation"]
-        dr_inst_arr = minutely["direct_radiation_instant"]
+        dni_avg_arr = minutely["direct_normal_irradiance"]
+        dni_inst_arr = minutely["direct_normal_irradiance_instant"]
         snow_depth_arr = minutely["snow_depth"]
         temp_arr = minutely["temperature_2m"]
 
@@ -294,12 +302,25 @@ class OpenMeteoSolarForecast:
             for ts in minutely["time"]
         ]
 
-        daily_dates = [
-            dt.fromtimestamp(ts, UTC).astimezone(tz).date()
-            for ts in data["daily"]["time"]
-        ]
-        sunrise_dict = build_sun_times(daily_dates, data["daily"]["sunrise"], tz)
-        sunset_dict = build_sun_times(daily_dates, data["daily"]["sunset"], tz)
+        lat = array["latitude"]
+        lon = array["longitude"]
+
+        # Averaged values cover the preceding 15 minutes; use the interval
+        # midpoint for their solar position.
+        times_inst = pd.to_datetime(minutely["time"], unit="s", utc=True)
+        times_avg = times_inst - pd.Timedelta(minutes=7.5)
+        solpos_inst = solar_position(times_inst, lat, lon)
+        solpos_avg = solar_position(times_avg, lat, lon)
+
+        gti_avg_arr = compute_gti(
+            solpos_avg, ghi_avg_arr, dhi_avg_arr, dni_avg_arr, array
+        ).tolist()
+        gti_inst_arr = compute_gti(
+            solpos_inst, ghi_inst_arr, dhi_inst_arr, dni_inst_arr, array
+        ).tolist()
+
+        daily_dates = sorted({t.date() for t in time_arr})
+        sunrise_dict, sunset_dict = build_sun_times(daily_dates, lat, lon, tz)
 
         damping_factors = [
             calculate_damping_coefficient(
@@ -319,12 +340,7 @@ class OpenMeteoSolarForecast:
 
         if use_horizon:
             hmap_arr = numpy.array(array["horizon_map"]).T
-            horizon_shading = [
-                check_horizon_shading(
-                    t, array["longitude"], array["latitude"], hmap_arr
-                )
-                for t in time_arr
-            ]
+            horizon_shading = check_horizon_shading(solpos_inst, hmap_arr)
         else:
             horizon_shading = [False for t in time_arr]
 
@@ -340,7 +356,7 @@ class OpenMeteoSolarForecast:
             if i == 0:
                 continue
 
-            if None in (
+            if _is_missing(
                 gti_avg_arr[i],
                 gti_inst_arr[i],
                 *temp_arr[i - 1 : i + 1],
@@ -351,8 +367,8 @@ class OpenMeteoSolarForecast:
             g_inst = gti_inst_arr[i]
             d_avg = dhi_avg_arr[i]
             d_inst = dhi_inst_arr[i]
-            dr_avg = dr_avg_arr[i]
-            dr_inst = dr_inst_arr[i]
+            dr_avg = ghi_avg_arr[i] - d_avg
+            dr_inst = ghi_inst_arr[i] - d_inst
 
             # Calculate diffuse contribution (only if partial_shading enabled).
             # Preferred over the simple ratio d/dr, because that may turn 0

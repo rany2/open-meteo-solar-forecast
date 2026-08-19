@@ -91,6 +91,8 @@ def calculate_damping_coefficient(
     def linear_damping(start: dt, end: dt, damping: float) -> float:
         """Calculate the linear damping coefficient."""
         duration = end - start
+        if not duration:
+            return 1.0
         elapsed = time - start
         damping = 1.0 - damping
         return (elapsed / duration) * (1.0 - damping) + damping

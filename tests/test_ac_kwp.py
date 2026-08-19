@@ -14,7 +14,7 @@ def _make_forecast(**kwargs) -> OpenMeteoSolarForecast:
     defaults = {
         "latitude": [48.0, 48.0],
         "longitude": [11.0, 11.0],
-        "declination": [20, 30],
+        "declination": [0, 0],
         "azimuth": [0, 0],
         "dc_kwp": [2.0, 2.0],
     }
@@ -67,29 +67,22 @@ def _fake_api_data() -> dict:
     tz = timezone.utc
     t0 = int(datetime(2026, 8, 14, 12, 0, tzinfo=tz).timestamp())
     t1 = t0 + 900
-    day = int(datetime(2026, 8, 14, 0, 0, tzinfo=tz).timestamp())
-    sunrise = int(datetime(2026, 8, 14, 6, 0, tzinfo=tz).timestamp())
-    sunset = int(datetime(2026, 8, 14, 20, 0, tzinfo=tz).timestamp())
-    # With GTI = 1000 W/m² (G_STC) and an ambient temperature chosen so the
+    # Pure diffuse irradiance on a horizontal plane (tilt 0) gives an exact
+    # GTI of 1000 W/m² (G_STC). With an ambient temperature chosen so the
     # cell temperature equals STC (25°C), each array produces exactly dc_wp.
     t_amb = 25.0 - 1000.0 * 0.0342
     return {
         "utc_offset_seconds": 0,
         "minutely_15": {
             "time": [t0, t1],
-            "global_tilted_irradiance": [1000.0, 1000.0],
-            "global_tilted_irradiance_instant": [1000.0, 1000.0],
-            "diffuse_radiation": [0.0, 0.0],
-            "diffuse_radiation_instant": [0.0, 0.0],
-            "direct_radiation": [1000.0, 1000.0],
-            "direct_radiation_instant": [1000.0, 1000.0],
+            "shortwave_radiation": [1000.0, 1000.0],
+            "shortwave_radiation_instant": [1000.0, 1000.0],
+            "diffuse_radiation": [1000.0, 1000.0],
+            "diffuse_radiation_instant": [1000.0, 1000.0],
+            "direct_normal_irradiance": [0.0, 0.0],
+            "direct_normal_irradiance_instant": [0.0, 0.0],
             "snow_depth": [0.0, 0.0],
             "temperature_2m": [t_amb, t_amb],
-        },
-        "daily": {
-            "time": [day],
-            "sunrise": [sunrise],
-            "sunset": [sunset],
         },
     }
 
