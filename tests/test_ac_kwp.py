@@ -22,6 +22,19 @@ def _make_forecast(**kwargs) -> OpenMeteoSolarForecast:
     return OpenMeteoSolarForecast(**defaults)
 
 
+def _single_array(**kwargs) -> OpenMeteoSolarForecast:
+    """Create a one-array forecast matching one half of ``_make_forecast``."""
+    defaults = {
+        "latitude": 48.0,
+        "longitude": 11.0,
+        "declination": [0],
+        "azimuth": [0],
+        "dc_kwp": [2.0],
+    }
+    defaults.update(kwargs)
+    return OpenMeteoSolarForecast(**defaults)
+
+
 class AcKwpConfigTests(unittest.TestCase):
     """Verify ac_kwp validation and normalization."""
 
@@ -80,6 +93,7 @@ def _fake_api_data() -> dict:
             "diffuse_radiation_instant": [1000.0, 1000.0],
             "direct_normal_irradiance": [0.0, 0.0],
             "direct_normal_irradiance_instant": [0.0, 0.0],
+            "snowfall": [0.0, 0.0],
             "snow_depth": [0.0, 0.0],
             "temperature_2m": [t_amb, t_amb],
             "wind_speed_10m": [1.0, 1.0],
@@ -100,32 +114,43 @@ class AcKwpClampTests(unittest.IsolatedAsyncioTestCase):
         assert len(estimate.watts) == 1
         return next(iter(estimate.watts.values()))
 
-    async def _per_array_baseline(self) -> float:
-        """Return the unclamped output of a single array."""
-        total = await self._estimate_total(_make_forecast())
-        return total / 2
-
     async def test_no_inverter_limit(self) -> None:
-        """Sum both arrays without clamping when no capacity is set."""
+        """Sum both arrays without a capacity limit."""
         total = await self._estimate_total(_make_forecast())
         assert 3000 < total < 4000
 
     async def test_shared_inverter_clamps_combined_output(self) -> None:
-        """Clamp the combined output to a shared inverter's capacity."""
+        """Cap the combined output at a shared inverter's AC nameplate.
+
+        The PVWatts inverter model is parameterised by a DC input limit, so
+        the library scales the AC rating up by the nominal efficiency to make
+        the cap land exactly on the advertised figure.
+        """
         total = await self._estimate_total(_make_forecast(ac_kwp=1.0))
         assert total == 1000
 
     async def test_per_array_inverters_clamp_individually(self) -> None:
-        """Clamp each array to its own inverter capacity before summing."""
-        baseline = await self._per_array_baseline()
+        """Convert each array through its own inverter before summing.
+
+        Part-load efficiency depends on how hard an inverter is driven, so an
+        oversized unit on the second array is not simply half the unlimited
+        two-array total. Compare against the same array modelled on its own.
+        """
+        solo = await self._estimate_total(_single_array(ac_kwp=[3.0]))
         total = await self._estimate_total(_make_forecast(ac_kwp=[1.0, 3.0]))
-        assert total == 1000 + baseline
+        assert total == 1000 + solo
 
     async def test_per_array_none_entry_is_unlimited(self) -> None:
-        """Leave arrays with a None capacity unclamped."""
-        baseline = await self._per_array_baseline()
+        """Leave arrays with a None capacity uncapped."""
+        solo = await self._estimate_total(_single_array(ac_kwp=[None]))
         total = await self._estimate_total(_make_forecast(ac_kwp=[1.0, None]))
-        assert total == 1000 + baseline
+        assert total == 1000 + solo
+
+    async def test_undersized_inverter_reduces_output(self) -> None:
+        """A smaller inverter must never yield more than a larger one."""
+        small = await self._estimate_total(_make_forecast(ac_kwp=1.0))
+        large = await self._estimate_total(_make_forecast(ac_kwp=10.0))
+        assert small < large
 
 
 if __name__ == "__main__":

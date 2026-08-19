@@ -54,19 +54,19 @@ class QuarterHourEnergyTests(unittest.TestCase):
 
         assert periods == {start: 2_500.0}
 
-    def test_conversion_follows_array_combination_and_inverter_clipping(self) -> None:
-        """Keep conversion downstream of existing combination and clipping."""
+    def test_conversion_follows_array_combination_and_inverter_stage(self) -> None:
+        """Keep conversion downstream of array combination and the inverter."""
         source = (
             Path(__file__).resolve().parents[1]
             / "src/open_meteo_solar_forecast/open_meteo_solar_forecast.py"
         ).read_text(encoding="utf-8")
 
         combined = source.index("w_avg[time_start] +=")
-        clipped = source.index("w_avg[time] = min")
+        inverted = source.index("w_avg[time] = round(inverter_ac_power")
         converted = source.index("wh_period_15m = _quarter_hour_energy(w_avg)")
         returned = source.index("wh_period_15m=wh_period_15m")
 
-        assert combined < clipped < converted < returned
+        assert combined < inverted < converted < returned
         assert "watts=w_inst" in source
         assert "wh_period=wh_period" in source
         assert "wh_days=wh_days" in source

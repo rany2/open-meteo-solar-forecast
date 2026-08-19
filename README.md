@@ -70,10 +70,9 @@ async def main() -> None:
         declination=20,
         azimuth=10,
         dc_kwp=2.160,
-		use_horizon=True,
-		partial_shading=True,
-        horizon_map=((0,30),(360,30),
-		max_snowcover_depth_cm=5.0,
+        use_horizon=True,
+        partial_shading=True,
+        horizon_map=((0, 30), (360, 30)),
     ) as forecast:
         estimate = await forecast.estimate()
         print(estimate)
@@ -95,7 +94,6 @@ if __name__ == "__main__":
 | `use_horizon` | `bool \| list[bool] \| tuple[bool, ...]` | Whether to use horizon shading (optional, default = False) |
 | `partial_shading` | `bool \| list[bool] \| tuple[bool, ...]` | Whether to use interpret horizon shading as partial [experimental] (optional, default = False) |
 | `horizon_map` | `tuple of 2-tuples \| list[tuple of 2-tuples]` | Map of the horizon* (required if use_horizon = True) |
-| `max_snowcover_depth_cm` | `float \| list[float] \| tuple[float, ...]` | Critical snow coverage (cm) resulting in zero panel power [experimental] (required, default = 0.0 turns this off) |
 | `cache_path` | `str` | Path to a file used to cache API responses between runs (optional, default = no caching) |
 | `cache_prune` | `bool` | Whether to drop cached data older than the past window from disk (optional, default = True) |
 | `cache_max_age` | `float` | Serve cached data without calling the API if the cache is younger than this many seconds (optional, default = always refresh) |
@@ -121,7 +119,6 @@ async with OpenMeteoSolarForecast(
     horizon_map=[
         ((0, 0), (360, 0)),
         ((0, 20), (180, 10), (360, 20)),
-    max_snowcover_depth_cm=[5.0,5.0],
     ],
 ) as forecast:
     estimate = await forecast.estimate()
@@ -158,7 +155,32 @@ If **partial_shading** is disabled and a shadow is detected on the module, only 
 
 If **tracking** is set to a value other than `"none"`, the irradiance is calculated for a panel that follows the sun on the given axis. `"azimuth"` models a vertical-axis (east-west) tracker and ignores the `azimuth` parameter, `"tilt"` models a tilt-axis tracker and ignores the `declination` parameter, and `"dual"` models a dual-axis tracker and ignores both. Like the other per-array parameters, it can be passed as a list/tuple for multiple arrays.
 
-If **max_snowcover_depth_cm** is set to a value > 0, this value will be interpreted as the snow cover depth (in centimeters) that results in zero power from the module. In between, a linear interpolation over the forecast snow cover depth is applied. (A value of 0 turns this feature completely off.)
+### Modelled losses
+
+These are applied automatically and need no configuration or calibration.
+
+**DC system losses.** A real array never delivers its nameplate rating, so a
+fixed derate of ~8.7% covers soiling, module mismatch, wiring, connections,
+light-induced degradation and nameplate tolerance. The figure comes from NREL's
+PVWatts loss model, but deliberately excludes two of its components: *shading*,
+because this library models shading explicitly via `horizon_map`, and
+*availability*, because a fleet-average outage allowance does not belong in a
+per-interval forecast. Use `efficiency_factor` to layer additional site-specific
+derating on top.
+
+**Inverter efficiency.** DC is converted to AC with the PVWatts inverter model
+rather than a hard clip, so part-load efficiency is represented — an inverter is
+noticeably less efficient at 5% load than at 80%. Output saturates at the
+`ac_kwp` you configure. When `ac_kwp` is omitted, the inverter is sized to the
+array nameplate, which applies a realistic efficiency curve without inventing a
+clipping threshold.
+
+**Snow.** Snow coverage is tracked *on the modules* using the NREL/Marion model:
+it accumulates during snowfall and slides off at a rate set by tilt,
+plane-of-array irradiance and air temperature. This matters because snow on the
+ground is a poor proxy for snow on a panel — ground snow lies for weeks, while a
+tilted module sheds within hours of the sun reaching it. No configuration is
+needed; the required `snowfall` and `snow_depth` data is fetched automatically.
 
 ## Contributing
 

@@ -8,7 +8,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, timedelta, timezone
 from datetime import datetime as dt
-from typing import Any, Self
+from typing import Any, NamedTuple, Self
 
 import numpy
 import pandas as pd
@@ -48,8 +48,10 @@ from .power import (
     diffuse_fraction,
     gen_power,
     hourly_average_power,
-    snowcover_factor,
+    inverter_ac_power,
+    inverter_dc_input_limit,
 )
+from .snow import snow_dc_loss
 from .sun import (
     build_sun_times,
     check_horizon_shading,
@@ -60,6 +62,18 @@ from .sun import (
 __all__ = ["OpenMeteoSolarForecast", "_quarter_hour_energy"]
 
 _LOGGER = logging.getLogger(__name__)
+
+
+class _ArraySeries(NamedTuple):
+    """Vectorised per-timestep series precomputed for a single PV array."""
+
+    gti_avg: list[float]
+    gti_inst: list[float]
+    damping: list[float]
+    horizon_shading: Any
+    snow_loss: numpy.ndarray
+    dc_wp: float
+    pdc0: float | None
 
 
 @dataclass
@@ -86,7 +100,6 @@ class OpenMeteoSolarForecast:
     use_horizon: bool | list[bool] = False
     partial_shading: bool | list[bool] = False
     horizon_map: tuple(tuple(float)) | list[tuple(tuple(float))] = ((0.0,20.0),(360.0,20.0))
-    max_snowcover_depth_cm: float | list[float] = 0.0
     albedo: float | list[float] = 0.25
     cache_path: str | None = None
     cache_prune: bool = True
@@ -150,7 +163,6 @@ class OpenMeteoSolarForecast:
         self.use_horizon = normalize("use_horizon")
         self.partial_shading = normalize("partial_shading")
         self.horizon_map = normalize("horizon_map", tuple_as_list=False)
-        self.max_snowcover_depth_cm = normalize("max_snowcover_depth_cm")
         self.albedo = normalize("albedo")
         validate_albedo(self.albedo)
 
@@ -259,7 +271,6 @@ class OpenMeteoSolarForecast:
             "use_horizon",
             "partial_shading",
             "horizon_map",
-            "max_snowcover_depth_cm",
             "albedo",
             "ac_kwp",
         )
@@ -271,7 +282,7 @@ class OpenMeteoSolarForecast:
         ",shortwave_radiation,shortwave_radiation_instant"
         ",diffuse_radiation,diffuse_radiation_instant"
         ",direct_normal_irradiance,direct_normal_irradiance_instant"
-        ",snow_depth,wind_speed_10m"
+        ",snowfall,snow_depth,wind_speed_10m"
     )
 
     def _forecast_params(self, past_days: int) -> dict[str, str]:
@@ -431,11 +442,77 @@ class OpenMeteoSolarForecast:
         return {
             "minutely": minutely,
             "time_arr": time_arr,
+            "times_index": times_inst,
             "solpos_inst": solar_position(times_inst, self.latitude, self.longitude),
             "solpos_avg": solar_position(times_avg, self.latitude, self.longitude),
             "sunrise": sunrise_dict,
             "sunset": sunset_dict,
         }
+
+    def _array_series(
+        self, array: dict[str, Any], weather: dict[str, Any]
+    ) -> _ArraySeries:
+        """Precompute the vectorised per-timestep series for one array.
+
+        Everything here is computed across the whole horizon at once (plane-of
+        -array transposition, damping, snow coverage, horizon shading) so that
+        the accumulation loop only has to index into the results.
+        """
+        minutely = weather["minutely"]
+        time_arr = weather["time_arr"]
+        solpos_inst = weather["solpos_inst"]
+
+        gti_avg_arr = compute_gti(
+            weather["solpos_avg"],
+            minutely["shortwave_radiation"],
+            minutely["diffuse_radiation"],
+            minutely["direct_normal_irradiance"],
+            array,
+        ).tolist()
+        gti_inst_arr = compute_gti(
+            solpos_inst,
+            minutely["shortwave_radiation_instant"],
+            minutely["diffuse_radiation_instant"],
+            minutely["direct_normal_irradiance_instant"],
+            array,
+        ).tolist()
+
+        sunrise_dict = weather["sunrise"]
+        sunset_dict = weather["sunset"]
+        damping_factors = [
+            calculate_damping_coefficient(
+                t,
+                sunrise_dict[t.date()],
+                sunset_dict[t.date()],
+                array["damping_morning"],
+                array["damping_evening"],
+            )
+            for t in time_arr
+        ]
+
+        if array["use_horizon"]:
+            hmap_arr = numpy.array(array["horizon_map"]).T
+            horizon_shading = check_horizon_shading(solpos_inst, hmap_arr)
+        else:
+            horizon_shading = [False] * len(time_arr)
+
+        dc_wp = array["dc_kwp"] * 1000
+
+        return _ArraySeries(
+            gti_avg=gti_avg_arr,
+            gti_inst=gti_inst_arr,
+            damping=damping_factors,
+            horizon_shading=horizon_shading,
+            snow_loss=self._array_snow_loss(array, weather, gti_avg_arr),
+            dc_wp=dc_wp,
+            # Per-array inverter (only when per-array capacities are given; a
+            # shared inverter converts the combined DC output later).
+            pdc0=(
+                None
+                if self.shared_inverter
+                else inverter_dc_input_limit(array["ac_kwp"] * 1000, dc_wp)
+            ),
+        )
 
     def _accumulate_array_power(
         self,
@@ -458,61 +535,22 @@ class OpenMeteoSolarForecast:
         ghi_inst_arr = minutely["shortwave_radiation_instant"]
         dhi_avg_arr = minutely["diffuse_radiation"]
         dhi_inst_arr = minutely["diffuse_radiation_instant"]
-        dni_avg_arr = minutely["direct_normal_irradiance"]
-        dni_inst_arr = minutely["direct_normal_irradiance_instant"]
-        snow_depth_arr = minutely["snow_depth"]
         temp_arr = minutely["temperature_2m"]
         wind_arr = minutely["wind_speed_10m"]
-
         time_arr = weather["time_arr"]
-        solpos_inst = weather["solpos_inst"]
-        solpos_avg = weather["solpos_avg"]
-        sunrise_dict = weather["sunrise"]
-        sunset_dict = weather["sunset"]
 
-        gti_avg_arr = compute_gti(
-            solpos_avg, ghi_avg_arr, dhi_avg_arr, dni_avg_arr, array
-        ).tolist()
-        gti_inst_arr = compute_gti(
-            solpos_inst, ghi_inst_arr, dhi_inst_arr, dni_inst_arr, array
-        ).tolist()
-
-        damping_factors = [
-            calculate_damping_coefficient(
-                t,
-                sunrise_dict[t.date()],
-                sunset_dict[t.date()],
-                array["damping_morning"],
-                array["damping_evening"],
-            )
-            for t in time_arr
-        ]
+        s = self._array_series(array, weather)
 
         use_horizon = array["use_horizon"]
         partial_shading = array["partial_shading"]
-        max_snowcover_depth_cm = array["max_snowcover_depth_cm"]
         efficiency = array["efficiency_factor"]
-
-        if use_horizon:
-            hmap_arr = numpy.array(array["horizon_map"]).T
-            horizon_shading = check_horizon_shading(solpos_inst, hmap_arr)
-        else:
-            horizon_shading = [False for t in time_arr]
-
-        dc_wp = array["dc_kwp"] * 1000
-
-        # Per-array inverter clamp (only when per-array capacities are
-        # given; a shared inverter clamps the combined output below)
-        ac_wp_array = (
-            float("inf") if self.shared_inverter else array["ac_kwp"] * 1000
-        )
 
         for i, time in enumerate(time_arr):
             if i == 0:
                 continue
 
-            g_avg = gti_avg_arr[i]
-            g_inst = gti_inst_arr[i]
+            g_avg = s.gti_avg[i]
+            g_inst = s.gti_inst[i]
             d_avg = dhi_avg_arr[i]
             d_inst = dhi_inst_arr[i]
             dr_avg = ghi_avg_arr[i] - d_avg
@@ -536,7 +574,7 @@ class OpenMeteoSolarForecast:
             # minutes)
             time_start = time - timedelta(minutes=15)
 
-            eff_damped = efficiency * damping_factors[i]
+            eff_damped = efficiency * s.damping[i]
 
             # If horizon-shaded, apply diffuse radiation and optionally the
             # diffuse/direct factor.
@@ -547,48 +585,80 @@ class OpenMeteoSolarForecast:
             # operates at pure diffuse power. In between, the partial shading
             # effect is assumed to be directly dependent on f.
             # Inspired by https://pvlib-python.readthedocs.io/en/stable/gallery/shading/plot_partial_module_shading_simple.html#calculating-shading-loss-across-shading-scenarios
-            if horizon_shading[i]:
+            if s.horizon_shading[i]:
                 irr_avg = d_avg * f_avg
                 irr_inst = d_inst * f_inst
             else:
                 irr_avg = g_avg
                 irr_inst = g_inst
 
-            if max_snowcover_depth_cm > 0:
-                factor = snowcover_factor(snow_depth_arr[i], max_snowcover_depth_cm)
-                irr_avg *= factor
-                irr_inst *= factor
-
             wind = wind_arr[i]
 
-            w_avg[time_start] += round(
-                min(
-                    gen_power(irr_avg, temp_avg, wind, eff_damped, dc_wp),
-                    ac_wp_array,
-                )
+            # Snow shades whole strings rather than attenuating irradiance,
+            # so it derates DC power instead of scaling the input irradiance.
+            snow_factor = 1.0 - s.snow_loss[i]
+
+            dc_avg = (
+                gen_power(irr_avg, temp_avg, wind, eff_damped, s.dc_wp) * snow_factor
             )
-            w_inst[time_start] += round(
-                min(
-                    gen_power(irr_inst, temp_inst, wind, eff_damped, dc_wp),
-                    ac_wp_array,
-                )
+            dc_inst = (
+                gen_power(irr_inst, temp_inst, wind, eff_damped, s.dc_wp) * snow_factor
             )
 
-    def _clamp_to_inverter(
+            if s.pdc0 is not None:
+                dc_avg = inverter_ac_power(dc_avg, s.pdc0)
+                dc_inst = inverter_ac_power(dc_inst, s.pdc0)
+
+            w_avg[time_start] += round(dc_avg)
+            w_inst[time_start] += round(dc_inst)
+
+    @staticmethod
+    def _array_snow_loss(
+        array: dict[str, Any],
+        weather: dict[str, Any],
+        gti_avg_arr: list[float],
+    ) -> numpy.ndarray:
+        """Fraction of DC capacity this array loses to snow at each step.
+
+        Snow is tracked *on the modules*: it accumulates during snowfall and
+        slides off at a rate set by tilt, plane-of-array irradiance and air
+        temperature. Plane-of-array irradiance is the right driver because it
+        is what warms the panel surface and releases the snow.
+        """
+        minutely = weather["minutely"]
+        surface_tilt = (
+            weather["solpos_avg"]["apparent_zenith"].clip(0.0, 90.0).to_numpy()
+            if array["tracking"] in ("tilt", "dual")
+            else array["declination"]
+        )
+        return snow_dc_loss(
+            weather["times_index"],
+            minutely["snowfall"],
+            minutely["snow_depth"],
+            gti_avg_arr,
+            minutely["temperature_2m"],
+            surface_tilt=surface_tilt,
+        )
+
+    def _apply_inverter(
         self, w_avg: dict[dt, int], w_inst: dict[dt, int]
     ) -> None:
-        """Clamp the power generated to the AC power of the inverter(s).
+        """Convert the combined DC output to AC for a shared inverter.
 
-        With a shared inverter the combined output is clamped to its capacity;
-        with per-array inverters each array was already clamped individually,
-        so the combined output is limited by the sum of all capacities.
+        Only applies when a single inverter is shared by every array. With
+        per-array inverters each array was already converted individually in
+        ``_accumulate_array_power``, so the totals are AC already and the
+        combined output is limited by the sum of the individual capacities.
         """
-        ac_kwp_total = self.ac_kwp[0] if self.shared_inverter else sum(self.ac_kwp)
-        ac_wp = ac_kwp_total * 1000
+        if not self.shared_inverter:
+            return
+
+        dc_wp_total = sum(self.dc_kwp) * 1000
+        pdc0 = inverter_dc_input_limit(self.ac_kwp[0] * 1000, dc_wp_total)
         for time in w_avg:
-            w_avg[time] = min(w_avg[time], ac_wp)
+            w_avg[time] = round(inverter_ac_power(w_avg[time], pdc0))
         for time in w_inst:
-            w_inst[time] = min(w_inst[time], ac_wp)
+            w_inst[time] = round(inverter_ac_power(w_inst[time], pdc0))
 
     async def estimate(self) -> Estimate:
         """Get solar production estimations from the API.
@@ -609,7 +679,7 @@ class OpenMeteoSolarForecast:
         for array in self._array_params():
             self._accumulate_array_power(array, weather, w_avg, w_inst)
 
-        self._clamp_to_inverter(w_avg, w_inst)
+        self._apply_inverter(w_avg, w_inst)
 
         wh_period_15m = _quarter_hour_energy(w_avg)
         wh_period = hourly_average_power(w_avg)
