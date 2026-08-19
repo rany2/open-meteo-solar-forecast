@@ -15,9 +15,17 @@ import numpy as np
 import pandas as pd
 from pvlib import atmosphere, iam, irradiance, solarposition
 
-from open_meteo_solar_forecast.sun import check_horizon_shading, compute_gti
+from open_meteo_solar_forecast.sun import (
+    check_horizon_shading,
+    compute_gti,
+    sky_view_factor,
+)
 
 LAT, LON = 52.0, 4.0
+
+
+def _uniform(elevation: float) -> tuple[tuple[float, float], ...]:
+    return ((0.0, elevation), (360.0, elevation))
 
 
 def _scene(n: int = 48, tilt: float = 40.0, albedo: float = 0.25):
@@ -161,18 +169,124 @@ class PlaneIrradianceTests(unittest.TestCase):
         assert snowy.beam_blocked.sum() > bare.beam_blocked.sum()
 
 
+class SkyViewFactorTests(unittest.TestCase):
+    """Verify the fraction of sky diffuse surviving a skyline."""
+
+    def test_matches_the_analytic_solution_for_a_flat_plane(self) -> None:
+        """Reproduce cos^2(h) exactly for a horizontal plane.
+
+        For tilt 0 and a uniform skyline at elevation h, integrating the
+        visible sky weighted by incidence angle has the closed form cos^2(h).
+        This pins the geometry.
+        """
+        for h in (0, 10, 20, 30, 45, 60, 80):
+            got = sky_view_factor(_uniform(h), 0.0, 180.0)
+            assert abs(got - np.cos(np.radians(h)) ** 2) < 1e-6
+
+    def test_flat_horizon_is_a_no_op(self) -> None:
+        """Hide no sky when the skyline is flat."""
+        for tilt in (0.0, 20.0, 40.0, 90.0):
+            assert abs(sky_view_factor(_uniform(0.0), tilt, 180.0) - 1.0) < 1e-9
+
+    def test_a_full_wall_hides_everything(self) -> None:
+        """Leave no visible sky behind a 90 degree skyline."""
+        assert sky_view_factor(_uniform(90.0), 35.0, 180.0) < 1e-6
+
+    def test_decreases_monotonically_with_skyline_height(self) -> None:
+        """Hide more sky as the skyline rises."""
+        values = [
+            sky_view_factor(_uniform(h), 35.0, 180.0)
+            for h in (0, 5, 10, 20, 30, 45, 60, 80)
+        ]
+        assert values == sorted(values, reverse=True)
+
+    def test_is_directional(self) -> None:
+        """Weight obstructions by whether the array actually faces them.
+
+        A tilted array barely sees the sky behind it, so a hill there should
+        cost far less than the same hill in front.
+        """
+        in_front = ((0.0, 0.0), (90.0, 0.0), (180.0, 40.0), (270.0, 0.0),
+                    (360.0, 0.0))
+        behind = ((0.0, 40.0), (90.0, 0.0), (180.0, 0.0), (270.0, 0.0),
+                  (360.0, 40.0))
+        south_facing = 180.0
+        assert (
+            sky_view_factor(in_front, 35.0, south_facing)
+            < sky_view_factor(behind, 35.0, south_facing)
+        )
+
+    def test_bounded(self) -> None:
+        """Stay within [0, 1] across a range of shapes."""
+        for h in (0, 15, 45, 75, 90):
+            for tilt in (0.0, 15.0, 45.0, 90.0):
+                value = sky_view_factor(_uniform(h), tilt, 180.0)
+                assert 0.0 <= value <= 1.0
+
+
+class SkyViewIntegrationTests(unittest.TestCase):
+    """Verify the factor reaches the irradiance actually used."""
+
+    @staticmethod
+    def _plane(use_horizon: bool, elevation: float = 25.0):
+        solpos, ghi, dhi, dni, array = _scene()
+        array = {
+            **array,
+            "use_horizon": use_horizon,
+            "horizon_map": _uniform(elevation),
+        }
+        return compute_gti(solpos, ghi, dhi, dni, array)
+
+    def test_diffuse_is_reduced_even_when_the_sun_is_clear(self) -> None:
+        """Reduce diffuse at all times, not only while the sun is behind.
+
+        This is the whole point: a hill hides sky permanently. Compare only
+        timestamps where the sun is well above the skyline, so no beam
+        blocking is involved.
+        """
+        solpos, *_ = _scene()
+        high_sun = solpos["apparent_elevation"].to_numpy() > 40.0
+        assert high_sun.any()
+
+        plain = self._plane(use_horizon=False)
+        walled = self._plane(use_horizon=True)
+
+        assert (
+            walled.total.to_numpy()[high_sun] < plain.total.to_numpy()[high_sun]
+        ).all()
+
+    def test_no_effect_without_a_horizon(self) -> None:
+        """Leave arrays that did not opt in completely untouched."""
+        plain = self._plane(use_horizon=False)
+        solpos, ghi, dhi, dni, array = _scene()
+        assert np.allclose(plain.total, compute_gti(solpos, ghi, dhi, dni, array).total)
+
+    def test_blocked_still_never_exceeds_total(self) -> None:
+        """Preserve the ordering once the view factor is applied."""
+        walled = self._plane(use_horizon=True)
+        assert (walled.beam_blocked <= walled.total + 1e-9).all()
+
+
 class HorizonMonotonicityTests(unittest.TestCase):
     """Verify a taller skyline never increases collected irradiance."""
 
     @staticmethod
     def _collected(elevation: float) -> float:
+        """Total collected irradiance, via the same path the library uses.
+
+        Includes the sky-view factor, so this exercises beam blocking and
+        permanent sky obstruction together rather than only the former.
+        """
         solpos, ghi, dhi, dni, array = _scene()
+        array = {
+            **array,
+            "use_horizon": True,
+            "horizon_map": _uniform(elevation),
+        }
         plane = compute_gti(solpos, ghi, dhi, dni, array)
-        hmap = np.array(((0.0, elevation), (360.0, elevation))).T
+        hmap = np.array(_uniform(elevation)).T
         shaded = check_horizon_shading(solpos, hmap)
-        return float(
-            np.where(shaded, plane.beam_blocked, plane.total).sum()
-        )
+        return float(np.where(shaded, plane.beam_blocked, plane.total).sum())
 
     def test_raising_the_horizon_never_increases_output(self) -> None:
         """Decrease monotonically as the skyline rises."""

@@ -4,11 +4,18 @@ from __future__ import annotations
 
 from datetime import date, tzinfo
 from datetime import datetime as dt
+from functools import lru_cache
 from typing import Any, NamedTuple
 
 import numpy
 import pandas as pd
 from pvlib import atmosphere, iam, irradiance, solarposition
+
+# Resolution of the sky-dome integration below. 0.5 deg in azimuth and
+# elevation converges to well under 0.1% of the analytic result while staying
+# a few milliseconds of work, and the result is cached anyway.
+_SVF_AZIMUTH_STEPS = 720
+_SVF_ELEVATION_STEPS = 180
 
 
 class PlaneIrradiance(NamedTuple):
@@ -59,6 +66,12 @@ def compute_gti(
 
     Isotropic sky, horizon brightening and ground reflection all survive, since
     they arrive from directions the obstruction does not cover.
+
+    When a horizon profile is supplied, those surviving sky components are also
+    scaled by :func:`sky_view_factor`, because a skyline hides part of the sky
+    dome permanently rather than only while the sun is behind it. That scaling
+    applies to the unobstructed total as well, since the sky is missing at all
+    times of day.
     """
     times = solpos.index
     tracking = array["tracking"]
@@ -98,22 +111,103 @@ def compute_gti(
     iam_beam = iam.physical(aoi)
     iam_diffuse = iam.marion_diffuse("physical", surface_tilt)
 
+    # A skyline hides part of the sky dome at all times, not only when the sun
+    # is behind it. Circumsolar is excluded from the scaling: it tracks the
+    # sun, so it is either fully visible or fully blocked, which the caller
+    # decides by choosing between the two values returned here.
+    view_factor = 1.0
+    if array.get("use_horizon"):
+        view_factor = sky_view_factor(
+            tuple(tuple(float(v) for v in point) for point in array["horizon_map"]),
+            round(float(numpy.mean(numpy.asarray(surface_tilt, dtype=float))), 2),
+            round(float(numpy.mean(numpy.asarray(surface_azimuth, dtype=float))), 2),
+        )
+
     ground_term = ground * iam_diffuse["ground"]
+    diffuse_visible = (
+        (sky["poa_isotropic"] + sky["poa_horizon"]) * view_factor
+    )
     poa = (
         beam * iam_beam
-        + sky["poa_sky_diffuse"] * iam_diffuse["sky"]
+        + (diffuse_visible + sky["poa_circumsolar"]) * iam_diffuse["sky"]
         + ground_term
     )
-    poa_beam_blocked = (
-        (sky["poa_isotropic"] + sky["poa_horizon"]) * iam_diffuse["sky"]
-        + ground_term
-    )
+    poa_beam_blocked = diffuse_visible * iam_diffuse["sky"] + ground_term
 
     # Perez yields NaN below the horizon, where there is no irradiance anyway.
     return PlaneIrradiance(
         total=poa.fillna(0.0).clip(lower=0.0),
         beam_blocked=poa_beam_blocked.fillna(0.0).clip(lower=0.0),
     )
+
+
+@lru_cache(maxsize=64)
+def sky_view_factor(
+    horizon_map: tuple[tuple[float, float], ...],
+    surface_tilt: float,
+    surface_azimuth: float,
+) -> float:
+    """Fraction of a tilted plane's sky diffuse that survives the skyline.
+
+    Blocking the sun is only half of what a hill does. It also permanently
+    hides part of the sky dome, so diffuse light is reduced *at every moment*,
+    including when the sun is nowhere near the obstruction.
+
+    Computed by integrating the visible sky over the hemisphere, weighting each
+    direction by its incidence angle on the plane, and dividing by the same
+    integral with a flat horizon. For an unobstructed flat plane this reduces
+    to the familiar ``(1 + cos(tilt)) / 2`` and the ratio is 1.0.
+
+    The weighting is what makes the result directional: a hill behind a
+    south-facing array barely matters, while the same hill in front of it is
+    significant, because the plane hardly faces the sky behind it.
+
+    Args:
+    ----
+        horizon_map: ``(azimuth, elevation)`` pairs in degrees, azimuth
+            measured clockwise from north.
+        surface_tilt: Module tilt from horizontal, degrees.
+        surface_azimuth: Direction the modules face, degrees clockwise from
+            north (pvlib convention).
+
+    Returns:
+    -------
+        Multiplier in [0, 1] to apply to sky diffuse irradiance.
+
+    """
+    hmap = numpy.asarray(horizon_map, dtype=float)
+
+    # Cell centres, so no sample sits exactly on a boundary.
+    azimuth = (
+        numpy.linspace(0.0, 360.0, _SVF_AZIMUTH_STEPS, endpoint=False)
+        + 180.0 / _SVF_AZIMUTH_STEPS
+    )
+    elevation = (
+        numpy.linspace(0.0, 90.0, _SVF_ELEVATION_STEPS, endpoint=False)
+        + 45.0 / _SVF_ELEVATION_STEPS
+    )
+    grid_az, grid_el = numpy.meshgrid(azimuth, elevation, indexing="ij")
+
+    az_rad = numpy.radians(grid_az)
+    el_rad = numpy.radians(grid_el)
+    tilt_rad = numpy.radians(surface_tilt)
+    saz_rad = numpy.radians(surface_azimuth)
+
+    # Cosine of the angle between the sky direction and the surface normal.
+    cos_incidence = numpy.sin(el_rad) * numpy.cos(tilt_rad) + numpy.cos(
+        el_rad
+    ) * numpy.sin(tilt_rad) * numpy.cos(az_rad - saz_rad)
+
+    # Sky behind the plane contributes nothing; cos(el) is the solid-angle
+    # element for a hemisphere parameterised by elevation.
+    weight = numpy.clip(cos_incidence, 0.0, None) * numpy.cos(el_rad)
+    unobstructed = weight.sum()
+    if unobstructed <= 0:
+        return 1.0
+
+    horizon = numpy.interp(azimuth, hmap[:, 0], hmap[:, 1])
+    visible = grid_el >= horizon[:, None]
+    return float(numpy.clip(weight[visible].sum() / unobstructed, 0.0, 1.0))
 
 
 def check_horizon_shading(

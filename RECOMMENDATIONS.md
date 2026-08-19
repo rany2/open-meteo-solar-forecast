@@ -13,7 +13,7 @@ Completed work and its measurements live in [ACCURACY.md](ACCURACY.md).
 | # | Recommendation | Expected gain | Scope | Status |
 |---|---|---|---|---|
 | 1 | Irradiance-dependent (low-light) efficiency | 0.8–1.5 % | all users | **done** |
-| 2 | Horizon sky-view factor for diffuse | unquantified | `use_horizon` users | open |
+| 2 | Horizon sky-view factor for diffuse | 0.8–13 % | `use_horizon` users | **done** |
 | 3 | Satellite-observed irradiance for the recent past | large for "now" | regional | open |
 | 4 | Trimmed-mean ensemble instead of mean | ~0.8 % | all users | deferred |
 | 5 | Instantaneous timestamp alignment | — | — | rejected |
@@ -86,7 +86,29 @@ nameplate output at 1000 W/m² and 25 °C would shift by 0.08 %.
 
 ## 2. Horizon sky-view factor for diffuse
 
-**Status:** open. Affects `use_horizon` users only.
+**Status:** done. See `sky_view_factor` in `sun.py`.
+
+Oslo, 5 kWp at 40°, uniform skyline, extra loss *on top of* beam blocking:
+
+| Skyline | Beam blocking only | With sky-view factor | Extra loss |
+|---|---|---|---|
+| none | 1713.8 kWh | 1713.8 kWh | 0.00 % |
+| 0° | 1713.8 kWh | 1713.8 kWh | 0.00 % |
+| 5° | 1713.8 kWh | 1700.0 kWh | −0.81 % |
+| 10° | 1713.8 kWh | 1684.0 kWh | −1.74 % |
+| 15° | 1710.8 kWh | 1663.3 kWh | −2.77 % |
+| 25° | 1641.9 kWh | 1554.5 kWh | −5.32 % |
+| 40° | 1199.2 kWh | 1042.5 kWh | −13.07 % |
+
+Geometry is pinned by an analytic case: for a horizontal plane under a uniform
+skyline at elevation `h`, the factor has the closed form `cos^2(h)`, matched to
+1e-6. The integral is cached, so it costs 2.3 ms once and 0.06 us thereafter.
+
+Ground reflection is deliberately left unscaled. The obstruction does shade the
+ground too, but `shortwave_radiation` already describes the light reaching the
+location, so scaling it again would be double-counting of an uncertain size.
+
+### Original analysis
 
 Horizon shading currently blocks the direct beam and its circumsolar halo when
 the sun sits behind the skyline. That is correct as far as it goes, but a hill
