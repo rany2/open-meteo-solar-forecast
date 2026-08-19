@@ -3,18 +3,14 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import UTC, timedelta, timezone
 from datetime import datetime as dt
-from datetime import timedelta, timezone
 from typing import Any, Self
-import suncalc
-import numpy
-import pytz
 
+import numpy
 from aiohttp import ClientSession
 
-from .constants import ALPHA_TEMP, G_STC, TEMP_STC_CELL, RossModelConstants
 from .exceptions import (
     OpenMeteoSolarForecastAuthenticationError,
     OpenMeteoSolarForecastConfigError,
@@ -25,13 +21,26 @@ from .exceptions import (
     OpenMeteoSolarForecastRequestError,
 )
 from .models import Estimate
+from .params import (
+    is_list_like,
+    normalize_param,
+    normalize_required,
+    validate_ac_kwp,
+    validate_azimuth,
+    validate_tracking,
+)
+from .power import (
+    _quarter_hour_energy,
+    calculate_damping_coefficient,
+    daily_energy,
+    diffuse_fraction,
+    gen_power,
+    hourly_average_power,
+    snowcover_factor,
+)
+from .sun import build_sun_times, check_horizon_shading
 
-
-def _quarter_hour_energy(
-    average_power: Mapping[dt, int | float],
-) -> dict[dt, float]:
-    """Convert PT15M average power to energy for each exact interval."""
-    return {timestamp: power * 0.25 for timestamp, power in average_power.items()}
+__all__ = ["OpenMeteoSolarForecast", "_quarter_hour_energy"]
 
 
 @dataclass
@@ -70,26 +79,10 @@ class OpenMeteoSolarForecast:
         if self.ac_kwp is None:
             self.ac_kwp = float("inf")
 
-        def is_list_like(value: Any, *, tuple_as_list: bool = True) -> bool:
-            """Check if value should be interpreted as a list of per-array values."""
-            if isinstance(value, list):
-                return True
-            return tuple_as_list and isinstance(value, tuple)
+        self._normalize_required_params()
+        self._normalize_optional_params()
 
-        def normalize_required(attr_name: str, target_len: int) -> list[Any]:
-            """Normalize required parameters to a list of per-array values."""
-            attr = getattr(self, attr_name)
-            if is_list_like(attr):
-                attr_list = list(attr)
-                if len(attr_list) == target_len:
-                    return attr_list
-                if len(attr_list) == 1:
-                    return attr_list * target_len
-                msg = f"{attr_name} must be length 1 or match other array parameters"
-                raise OpenMeteoSolarForecastConfigError(msg)
-
-            return [attr] * target_len
-
+    def _normalize_required_params(self) -> None:
         required_attr_names = (
             "azimuth",
             "declination",
@@ -97,62 +90,39 @@ class OpenMeteoSolarForecast:
             "latitude",
             "longitude",
         )
-        required_values = [getattr(self, attr_name) for attr_name in required_attr_names]
+        required_values = [
+            getattr(self, attr_name) for attr_name in required_attr_names
+        ]
         target_len = max(
             len(value) if is_list_like(value) else 1 for value in required_values
         )
 
-        self.azimuth = normalize_required("azimuth", target_len)
-        for azimuth in self.azimuth:
-            if not -180 <= azimuth <= 180:
-                msg = (
-                    f"azimuth {azimuth} is out of range [-180, 180]. "
-                    "Azimuth uses the Open-Meteo convention: "
-                    "0 = South, -90 = East, 90 = West, +-180 = North. "
-                    "To convert a compass bearing (0 = North, 90 = East, "
-                    "180 = South, 270 = West), subtract 180."
-                )
-                raise OpenMeteoSolarForecastConfigError(msg)
-        self.declination = normalize_required("declination", target_len)
-        self.dc_kwp = normalize_required("dc_kwp", target_len)
-        self.latitude = normalize_required("latitude", target_len)
-        self.longitude = normalize_required("longitude", target_len)
+        for attr_name in required_attr_names:
+            setattr(
+                self,
+                attr_name,
+                normalize_required(attr_name, getattr(self, attr_name), target_len),
+            )
+        validate_azimuth(self.azimuth)
 
-        def test_param_len(
-            attr_name: str,
-            other_attr: list[Any],
-            *,
-            tuple_as_list: bool = True,
-        ) -> list[Any]:
-            """Validate the length of a param and return a list of the same length."""
-            attr = getattr(self, attr_name)
-            if is_list_like(attr, tuple_as_list=tuple_as_list):
-                attr_list = list(attr)
-                if len(attr_list) == len(other_attr):
-                    return attr_list
-                if len(attr_list) == 1:
-                    return attr_list * len(other_attr)
-                if len(attr_list) != len(other_attr):
-                    msg = f"{attr_name} must be the same length as the other parameters"
-                    raise OpenMeteoSolarForecastConfigError(msg)
+    def _normalize_optional_params(self) -> None:
+        def normalize(attr_name: str, *, tuple_as_list: bool = True) -> list[Any]:
+            return normalize_param(
+                attr_name,
+                getattr(self, attr_name),
+                len(self.dc_kwp),
+                tuple_as_list=tuple_as_list,
+            )
 
-            return [attr] * len(other_attr)
-
-        self.efficiency_factor = test_param_len("efficiency_factor", self.dc_kwp)
-        self.tracking = test_param_len("tracking", self.dc_kwp)
-        valid_tracking = {"none", "azimuth", "tilt", "dual"}
-        for tracking in self.tracking:
-            if tracking not in valid_tracking:
-                msg = f"tracking must be one of {sorted(valid_tracking)}, got {tracking!r}"
-                raise OpenMeteoSolarForecastConfigError(msg)
-        self.damping_morning = test_param_len("damping_morning", self.dc_kwp)
-        self.damping_evening = test_param_len("damping_evening", self.dc_kwp)
-        self.use_horizon = test_param_len("use_horizon", self.dc_kwp)
-        self.partial_shading = test_param_len("partial_shading", self.dc_kwp)
-        self.horizon_map = test_param_len(
-            "horizon_map", self.dc_kwp, tuple_as_list=False
-        )
-        self.max_snowcover_depth_cm = test_param_len("max_snowcover_depth_cm", self.dc_kwp)
+        self.efficiency_factor = normalize("efficiency_factor")
+        self.tracking = normalize("tracking")
+        validate_tracking(self.tracking)
+        self.damping_morning = normalize("damping_morning")
+        self.damping_evening = normalize("damping_evening")
+        self.use_horizon = normalize("use_horizon")
+        self.partial_shading = normalize("partial_shading")
+        self.horizon_map = normalize("horizon_map", tuple_as_list=False)
+        self.max_snowcover_depth_cm = normalize("max_snowcover_depth_cm")
 
         # A scalar ac_kwp models a single shared inverter that clamps the
         # combined output of all arrays. A list/tuple models one inverter per
@@ -160,13 +130,9 @@ class OpenMeteoSolarForecast:
         # that array's inverter capacity is unlimited.
         self.shared_inverter = not is_list_like(self.ac_kwp)
         self.ac_kwp = [
-            float("inf") if cap is None else cap
-            for cap in test_param_len("ac_kwp", self.dc_kwp)
+            float("inf") if cap is None else cap for cap in normalize("ac_kwp")
         ]
-        for ac_kwp in self.ac_kwp:
-            if ac_kwp <= 0:
-                msg = f"ac_kwp must be greater than 0, got {ac_kwp}"
-                raise OpenMeteoSolarForecastConfigError(msg)
+        validate_ac_kwp(self.ac_kwp)
 
     async def _request(
         self,
@@ -198,17 +164,14 @@ class OpenMeteoSolarForecast:
                 the rate limit of the API.
 
         """
-        # Connect as normal
         if self.session is None:
             self.session = ClientSession()
             self._close_session = True
 
-        # Add the API key to the request
         if self.api_key:
             params = params or {}
             params["apikey"] = self.api_key
 
-        # Add the weather model to the request
         if self.weather_model:
             if "," in self.weather_model:
                 raise OpenMeteoSolarForecastInvalidModel(
@@ -217,28 +180,13 @@ class OpenMeteoSolarForecast:
             params = params or {}
             params["models"] = self.weather_model
 
-        # Get response from the API
         response = await self.session.request(
             "GET",
             self.base_url + uri,
             params=params,
         )
 
-        if response.status in (502, 503):
-            raise OpenMeteoSolarForecastConnectionError("The API is unreachable")
-
-        if response.status == 400:
-            raise OpenMeteoSolarForecastRequestError("Bad request")
-
-        if response.status in (401, 403):
-            raise OpenMeteoSolarForecastAuthenticationError("Invalid API key")
-
-        if response.status == 422:
-            raise OpenMeteoSolarForecastConfigError("Invalid configuration")
-
-        if response.status == 429:
-            raise OpenMeteoSolarForecastRatelimitError("Rate limit exceeded")
-
+        self._raise_for_response_status(response.status)
         response.raise_for_status()
 
         content_type = response.headers.get("Content-Type", "")
@@ -250,6 +198,225 @@ class OpenMeteoSolarForecast:
             )
 
         return await response.json()
+
+    @staticmethod
+    def _raise_for_response_status(status: int) -> None:
+        if status in (502, 503):
+            raise OpenMeteoSolarForecastConnectionError("The API is unreachable")
+
+        if status == 400:
+            raise OpenMeteoSolarForecastRequestError("Bad request")
+
+        if status in (401, 403):
+            raise OpenMeteoSolarForecastAuthenticationError("Invalid API key")
+
+        if status == 422:
+            raise OpenMeteoSolarForecastConfigError("Invalid configuration")
+
+        if status == 429:
+            raise OpenMeteoSolarForecastRatelimitError("Rate limit exceeded")
+
+    def _array_params(self) -> list[dict[str, Any]]:
+        names = (
+            "azimuth",
+            "declination",
+            "dc_kwp",
+            "latitude",
+            "longitude",
+            "efficiency_factor",
+            "tracking",
+            "damping_morning",
+            "damping_evening",
+            "use_horizon",
+            "partial_shading",
+            "horizon_map",
+            "max_snowcover_depth_cm",
+            "ac_kwp",
+        )
+        values = zip(*(getattr(self, name) for name in names), strict=True)
+        return [dict(zip(names, row, strict=True)) for row in values]
+
+    async def _fetch_forecast(self, array: dict[str, Any]) -> Any:
+        # The API interprets "nan" as a tracked axis: azimuth=nan is a
+        # vertical-axis (east-west) tracker, tilt=nan a tilt-axis tracker.
+        tracking = array["tracking"]
+        params = {
+            "latitude": str(array["latitude"]),
+            "longitude": str(array["longitude"]),
+            "azimuth": "nan"
+            if tracking in ("azimuth", "dual")
+            else str(array["azimuth"]),
+            "tilt": "nan"
+            if tracking in ("tilt", "dual")
+            else str(array["declination"]),
+            "minutely_15": "temperature_2m"
+            ",global_tilted_irradiance,global_tilted_irradiance_instant,diffuse_radiation,diffuse_radiation_instant,direct_radiation,direct_radiation_instant,snow_depth",
+            "daily": "sunrise,sunset",
+            "forecast_days": str(self.forecast_days),
+            "past_days": str(self.past_days),
+            "timezone": "auto",
+            "timeformat": "unixtime",
+        }
+        return await self._request(
+            "/v1/forecast",
+            params=params,
+        )
+
+    def _accumulate_array_power(
+        self,
+        array: dict[str, Any],
+        data: Any,
+        tz: timezone,
+        w_avg: dict[dt, int],
+        w_inst: dict[dt, int],
+    ) -> None:
+        """Accumulate one array's estimated power into the shared totals.
+
+        Irradiance acronyms:
+            diffuse (horizontal) irr. (DHI): contribution of diffuse (scattered) sunlight [independent of tilt]
+            direct irr.: contribution of direct beam sunlight (on a horizontal plane?)
+            direct normal irr. (DNI): intensity of direct sunlight on a plane perpendicular to the beam
+            global horizontal irr. (GHI): sum of diffuse and direct sunlight collected on a horizontal plane (tilt = 0°)
+            global tilted irr. (GTI): sum of diffuse and direct sunlight collected on a tilted plane
+        """
+        minutely = data["minutely_15"]
+        gti_avg_arr = minutely["global_tilted_irradiance"]
+        gti_inst_arr = minutely["global_tilted_irradiance_instant"]
+        dhi_avg_arr = minutely["diffuse_radiation"]
+        dhi_inst_arr = minutely["diffuse_radiation_instant"]
+        dr_avg_arr = minutely["direct_radiation"]
+        dr_inst_arr = minutely["direct_radiation_instant"]
+        snow_depth_arr = minutely["snow_depth"]
+        temp_arr = minutely["temperature_2m"]
+
+        time_arr = [
+            dt.fromtimestamp(ts, UTC).astimezone(tz)
+            for ts in minutely["time"]
+        ]
+
+        daily_dates = [
+            dt.fromtimestamp(ts, UTC).astimezone(tz).date()
+            for ts in data["daily"]["time"]
+        ]
+        sunrise_dict = build_sun_times(daily_dates, data["daily"]["sunrise"], tz)
+        sunset_dict = build_sun_times(daily_dates, data["daily"]["sunset"], tz)
+
+        damping_factors = [
+            calculate_damping_coefficient(
+                t,
+                sunrise_dict[t.date()],
+                sunset_dict[t.date()],
+                array["damping_morning"],
+                array["damping_evening"],
+            )
+            for t in time_arr
+        ]
+
+        use_horizon = array["use_horizon"]
+        partial_shading = array["partial_shading"]
+        max_snowcover_depth_cm = array["max_snowcover_depth_cm"]
+        efficiency = array["efficiency_factor"]
+
+        if use_horizon:
+            hmap_arr = numpy.array(array["horizon_map"]).T
+            horizon_shading = [
+                check_horizon_shading(
+                    t, array["longitude"], array["latitude"], hmap_arr
+                )
+                for t in time_arr
+            ]
+        else:
+            horizon_shading = [False for t in time_arr]
+
+        dc_wp = array["dc_kwp"] * 1000
+
+        # Per-array inverter clamp (only when per-array capacities are
+        # given; a shared inverter clamps the combined output below)
+        ac_wp_array = (
+            float("inf") if self.shared_inverter else array["ac_kwp"] * 1000
+        )
+
+        for i, time in enumerate(time_arr):
+            if i == 0:
+                continue
+
+            if None in (
+                gti_avg_arr[i],
+                gti_inst_arr[i],
+                *temp_arr[i - 1 : i + 1],
+            ):
+                continue
+
+            g_avg = gti_avg_arr[i]
+            g_inst = gti_inst_arr[i]
+            d_avg = dhi_avg_arr[i]
+            d_inst = dhi_inst_arr[i]
+            dr_avg = dr_avg_arr[i]
+            dr_inst = dr_inst_arr[i]
+
+            # Calculate diffuse contribution (only if partial_shading enabled).
+            # Preferred over the simple ratio d/dr, because that may turn 0
+            # unexpectedly in morning/evening conditions, when dr = 0.
+            if use_horizon and partial_shading:
+                f_avg = diffuse_fraction(d_avg, dr_avg)
+                f_inst = diffuse_fraction(d_inst, dr_inst)
+            else:
+                f_avg = 1.0
+                f_inst = 1.0
+
+            temp_avg = (temp_arr[i] + temp_arr[i - 1]) / 2
+            temp_inst = temp_arr[i - 1]
+
+            # For minutely data, the GTI start time is 15 minutes before the
+            # time even for instant data (since the data is averaged over 15
+            # minutes)
+            time_start = time - timedelta(minutes=15)
+
+            eff_damped = efficiency * damping_factors[i]
+
+            # If horizon-shaded, apply diffuse radiation and optionally the
+            # diffuse/direct factor.
+            # --- experimental empiric partial shading approach ---
+            # On a sunny day (low f), 'hard' shadows result in the bypass
+            # diodes shutting off the module almost completely. On a cloudy
+            # day (high f), no 'hard' shadows are present and the module
+            # operates at pure diffuse power. In between, the partial shading
+            # effect is assumed to be directly dependent on f.
+            # Inspired by https://pvlib-python.readthedocs.io/en/stable/gallery/shading/plot_partial_module_shading_simple.html#calculating-shading-loss-across-shading-scenarios
+            if horizon_shading[i]:
+                irr_avg = d_avg * f_avg
+                irr_inst = d_inst * f_inst
+            else:
+                irr_avg = g_avg
+                irr_inst = g_inst
+
+            if max_snowcover_depth_cm > 0:
+                factor = snowcover_factor(snow_depth_arr[i], max_snowcover_depth_cm)
+                irr_avg *= factor
+                irr_inst *= factor
+
+            w_avg[time_start] += round(
+                min(gen_power(irr_avg, temp_avg, eff_damped, dc_wp), ac_wp_array)
+            )
+            w_inst[time_start] += round(
+                min(gen_power(irr_inst, temp_inst, eff_damped, dc_wp), ac_wp_array)
+            )
+
+    def _clamp_to_inverter(
+        self, w_avg: dict[dt, int], w_inst: dict[dt, int]
+    ) -> None:
+        """Clamp the power generated to the AC power of the inverter(s).
+
+        With a shared inverter the combined output is clamped to its capacity;
+        with per-array inverters each array was already clamped individually,
+        so the combined output is limited by the sum of all capacities.
+        """
+        ac_kwp_total = self.ac_kwp[0] if self.shared_inverter else sum(self.ac_kwp)
+        ac_wp = ac_kwp_total * 1000
+        for time in w_avg:
+            w_avg[time] = min(w_avg[time], ac_wp)
+        for time in w_inst:
+            w_inst[time] = min(w_inst[time], ac_wp)
 
     async def estimate(self) -> Estimate:
         """Get solar production estimations from the API.
@@ -263,365 +430,27 @@ class OpenMeteoSolarForecast:
         w_inst: dict[dt, int] = defaultdict(int)
         wh_days: dict[dt, int] = defaultdict(int)
 
-        def gen_power(gti: float, t_amb: float, eff: float) -> int:
-            """Calculate the power generated by a solar panel.
-
-            Formulas:
-            ---------
-                According to https://www.mdpi.com/2071-1050/14/3/1500 (equations 1 and 2) and Table 1,
-                the temperature formula should be:
-                     Tc = Ta + G * k
-                where:
-                    - Tc is the cell temperature
-                    - Ta is the ambient temperature
-                    - G is the irradiance (W/m²)
-                    - k is the Ross coefficient
-
-                For a typical residential PV installation, we use the "Not so well cooled" Ross coefficient
-                from Table 1, which is 0.0342. (TODO: make this coefficient configurable.)
-
-                References:
-                    - Ross model source: https://www.researchgate.net/publication/275438802_Thermal_effects_of_the_extended_holographic_regions_for_holographic_planar_concentrator
-                    - Power output formula: P = Pmax * (G / Gstc) * (1 + α * (Tc - Tstc)) * ηDC (see p.509)
-                      Source: https://www.researchgate.net/publication/372240079_Solar_Prediction_Strategy_for_Managing_Virtual_Power_Stations
-            """
-            temp_cell = t_amb + gti * RossModelConstants.NOT_SO_WELL_COOLED
-            power = dc_wp
-            power *= gti / G_STC
-            power *= 1 + ALPHA_TEMP * (temp_cell - TEMP_STC_CELL)
-            power *= eff
-            return round(max(0, power))
-        
-        # check if the horizon blocks out direct sunlight
-        def check_horizon_shading(
-            time: dt,
-            lon: float,
-            lat: float,
-            hmap: float()
-        ) -> bool:
-            
-            position_rad = suncalc.get_position(time, lon, lat)
-            azimuth_deg = (180 + numpy.rad2deg(position_rad['azimuth'])) % 360
-            altitude_deg = numpy.rad2deg(position_rad['altitude'])
-            horizon_deg = numpy.interp(azimuth_deg,hmap[0],hmap[1])
-            
-            if altitude_deg < horizon_deg:
-                shading = True
-            else:
-                shading = False
-            
-            return shading
-
-        def calculate_damping_coefficient(
-            time: dt,
-            sunrise: dt,
-            sunset: dt,
-            damping_morning: float,
-            damping_evening: float,
-        ) -> float:
-            """Calculate the damping coefficient for the current time.
-
-            Args:
-            ----
-                time: The current time.
-                sunrise: The time of sunrise.
-                sunset: The time of sunset.
-                damping_morning: The damping factor for the morning.
-                damping_evening: The damping factor for the evening.
-
-            Returns:
-            -------
-                The damping coefficient for the current time.
-
-            Notes:
-            -----
-                As the damping factor decreases, the power generated by the solar
-                panels increases. For example, when the damping factor is 0, the
-                power generated is at its maximum and no damping is applied. When
-                the damping factor is 1, the power generated is at its minimum and
-                the damping is fully applied.
-
-                This means that if a damping factor of 1.0 is applied for the morning,
-                at morning_start the power generated will be 0 as the coefficient would
-                be 0.0. As the time approaches morning_end, the coefficient will increase
-                linearly until it reaches 1.0 at morning_end. The same applies for the
-                evening, but the coefficient will decrease linearly from 1.0 to 0.0.
-
-            """
-            morning_start = sunrise
-            morning_end = sunrise + (sunset - sunrise) / 2
-            evening_start = morning_end
-            evening_end = sunset
-
-            def linear_damping(start: dt, end: dt, damping: float) -> float:
-                """Calculate the linear damping coefficient."""
-                duration = end - start
-                elapsed = time - start
-                damping = 1.0 - damping  # Invert the damping factor
-                return (elapsed / duration) * (1.0 - damping) + damping
-
-            if morning_start <= time <= morning_end:
-                return linear_damping(morning_start, morning_end, damping_morning)
-
-            if evening_start <= time <= evening_end:
-                return linear_damping(evening_end, evening_start, damping_evening)
-
-            return 1
-
         utc_offset = None
-        for (
-            azimuth,
-            declination,
-            dc_kwp,
-            latitude,
-            lonitude,
-            efficiency,
-            tracking,
-            damping_morning,
-            damping_evening,
-            use_horizon,
-            partial_shading,
-            horizon_map,
-            max_snowcover_depth_cm,
-            ac_kwp,
-        ) in zip(
-            self.azimuth,
-            self.declination,
-            self.dc_kwp,
-            self.latitude,
-            self.longitude,
-            self.efficiency_factor,
-            self.tracking,
-            self.damping_morning,
-            self.damping_evening,
-            self.use_horizon,
-            self.partial_shading,
-            self.horizon_map,
-            self.max_snowcover_depth_cm,
-            self.ac_kwp,
-            strict=True,
-        ):
-            '''
-            sorting out the confusing acronyms...
-            
-            diffuse (horizontal) irr. (DHI): contribution of diffuse (scattered) sunlight [independent of tilt]
-            direct irr.: contribution of direct beam sunlight (on a horizontal plane?)
-            direct normal irr. (DNI): intensity of direct sunlight on a plane perpendicular to the beam
-            global horizontal irr. (GHI): sum of diffuse and direct sunlight collected on a horizontal plane (tilt = 0°)
-            global tilted irr. (GTI): sum of diffuse and direct sunlight collected on a tilted plane
-            '''
-            # The API interprets "nan" as a tracked axis: azimuth=nan is a
-            # vertical-axis (east-west) tracker, tilt=nan a tilt-axis tracker.
-            params = {
-                "latitude": str(latitude),
-                "longitude": str(lonitude),
-                "azimuth": "nan" if tracking in ("azimuth", "dual") else str(azimuth),
-                "tilt": "nan" if tracking in ("tilt", "dual") else str(declination),
-                "minutely_15": "temperature_2m"
-                ",global_tilted_irradiance,global_tilted_irradiance_instant,diffuse_radiation,diffuse_radiation_instant,direct_radiation,direct_radiation_instant,snow_depth",
-                "daily": "sunrise,sunset",
-                "forecast_days": str(self.forecast_days),
-                "past_days": str(self.past_days),
-                "timezone": "auto",
-                "timeformat": "unixtime",
-            }
-            data = await self._request(
-                "/v1/forecast",
-                params=params,
-            )
-            gti_avg_arr = data["minutely_15"]["global_tilted_irradiance"]
-            gti_inst_arr = data["minutely_15"]["global_tilted_irradiance_instant"]
-            dhi_avg_arr = data["minutely_15"]["diffuse_radiation"]
-            dhi_inst_arr = data["minutely_15"]["diffuse_radiation_instant"]
-            dr_avg_arr = data["minutely_15"]["direct_radiation"]
-            dr_inst_arr = data["minutely_15"]["direct_radiation_instant"]
-            snow_depth_arr = data["minutely_15"]["snow_depth"]
-            temp_arr = data["minutely_15"]["temperature_2m"]            
+        tz = None
+        for array in self._array_params():
+            data = await self._fetch_forecast(array)
+
             if utc_offset is None:
                 utc_offset = data["utc_offset_seconds"]
             elif utc_offset != data["utc_offset_seconds"]:
                 raise OpenMeteoSolarForecastConfigError(
                     "The UTC offset is not the same for all locations"
                 )
-
             tz = timezone(timedelta(seconds=utc_offset))
 
-            time_arr = [
-                dt.fromtimestamp(ts, timezone.utc).astimezone(tz)
-                for ts in data["minutely_15"]["time"]
-            ]
+            self._accumulate_array_power(array, data, tz, w_avg, w_inst)
 
-            # Key sunrise/sunset by the date of the daily "time" entry rather
-            # than the date of the sunrise/sunset timestamp itself. For large
-            # UTC offsets (e.g. UTC+13) the API can return sunrise/sunset
-            # timestamps that fall on an adjacent local day, which previously
-            # caused a KeyError for dates missing from the dicts (issue #45).
-            daily_dates = [
-                dt.fromtimestamp(ts, timezone.utc).astimezone(tz).date()
-                for ts in data["daily"]["time"]
-            ]
+        self._clamp_to_inverter(w_avg, w_inst)
 
-            def anchor_to_day(ts: int, day) -> dt:
-                """Convert a timestamp to tz and re-anchor it onto the given day."""
-                time = dt.fromtimestamp(ts, timezone.utc).astimezone(tz)
-                if time.date() != day:
-                    time = dt.combine(day, time.timetz())
-                return time
-
-            sunrise_dict = {
-                day: anchor_to_day(ts, day)
-                for day, ts in zip(daily_dates, data["daily"]["sunrise"], strict=True)
-            }
-
-            sunset_dict = {
-                day: anchor_to_day(ts, day)
-                for day, ts in zip(daily_dates, data["daily"]["sunset"], strict=True)
-            }
-
-            damping_factors = [
-                calculate_damping_coefficient(
-                    t,
-                    sunrise_dict[t.date()],
-                    sunset_dict[t.date()],
-                    damping_morning,
-                    damping_evening,
-                )
-                for t in time_arr
-            ]
-                     
-            if use_horizon:
-                hmap_arr = numpy.array(horizon_map).T # convert list of tuples to numpy array
-                horizon_shading = [
-                    check_horizon_shading(t,lonitude,latitude,hmap_arr)
-                    for t in time_arr
-                ]
-            else:
-                horizon_shading = [
-                    False
-                    for t in time_arr
-                ]
-            
-            # Convert kW to W
-            dc_wp = dc_kwp * 1000
-
-            # Per-array inverter clamp (only when per-array capacities are
-            # given; a shared inverter clamps the combined output below)
-            ac_wp_array = float("inf") if self.shared_inverter else ac_kwp * 1000
-
-            for i, time in enumerate(time_arr):
-                # Skip the first element as we need the previous element to calculate
-                # the average temperature for the current time
-                if i == 0:
-                    continue
-
-                # Skip if any of the values are None
-                if None in (
-                    gti_avg_arr[i],
-                    gti_inst_arr[i],
-                    *temp_arr[i - 1 : i + 1],
-                ):
-                    continue
-
-                # Get the GTI for average and instantaneous values
-                g_avg = gti_avg_arr[i]
-                g_inst = gti_inst_arr[i]
-                d_avg = dhi_avg_arr[i]
-                d_inst = dhi_inst_arr[i]
-                dr_avg = dr_avg_arr[i]
-                dr_inst = dr_inst_arr[i]
-                
-                # Calculate diffuse contribution (only if partial_shading enabled)
-                # prefer this over simple ratio d/dr, because this may turn 0 unexpectedly in morning/evening conditions, when dr = 0 
-                # clamp to minimum 0 for possible implausible sets
-                if use_horizon and partial_shading:
-                    if (d_avg + dr_avg) > 0:
-                        f_avg = max(d_avg/(d_avg + dr_avg) , 0.0)
-                    else:
-                        f_avg = 1.0
-                        
-                    if (d_inst + dr_inst) > 0:
-                        f_inst = max(d_inst/(d_inst + dr_inst) , 0.0)
-                    else:
-                        f_inst = 1.0
-                else:
-                    f_avg = 1.0
-                    f_inst = 1.0
-                    
-
-                # Get the temperature for average and instantaneous values
-                temp_avg = (temp_arr[i] + temp_arr[i - 1]) / 2
-                temp_inst = temp_arr[i - 1]
-
-                # For minutely data, the GTI start time is 15 minutes before the time
-                # even for instant data (since the data is averaged over 15 minutes)
-                time_start = time - timedelta(minutes=15)
-
-                # Add the damping factor to the efficiency
-                eff_damped = efficiency * damping_factors[i]
-                
-                # Check for horizon shading - if shaded, apply diffuse radiation and optionally diffuse/direct factor
-                # --- experimental empiric partial shading approach ---
-                # On a sunny day (low f), there are 'hard' shadows resulting in the bypass diodes shutting of the module almost completely
-                # On a cloudy day (high f), no 'hard' shadows are present and the module operates at pure diffuse power
-                # In between, partial shading effect is assumed to be directly dependent on f
-                # inspired by https://pvlib-python.readthedocs.io/en/stable/gallery/shading/plot_partial_module_shading_simple.html#calculating-shading-loss-across-shading-scenarios
-                
-                if horizon_shading[i]:
-                    irr_avg = d_avg * f_avg
-                    irr_inst = d_inst * f_inst
-                else:
-                    irr_avg = g_avg
-                    irr_inst = g_inst
-                    
-                # Apply snow coverage as linear regression from 0 (panels not covered) to max_snowcover_depth_cm (in cm, panels producing 0 W)
-                # multiply snow_depth by 100 (m to cm) - clamp to 0...1 interval
-                if max_snowcover_depth_cm > 0:
-                    snowcover_factor =1.0 - min( (snow_depth_arr [i]*100)/max_snowcover_depth_cm , 1.0)
-                    irr_avg *= snowcover_factor
-                    irr_inst *= snowcover_factor
-
-                # Calculate and store the power generated, clamped to the
-                # array's own inverter capacity when one is configured
-                w_avg[time_start] += round(
-                    min(gen_power(irr_avg, temp_avg, eff_damped), ac_wp_array)
-                )
-                w_inst[time_start] += round(
-                    min(gen_power(irr_inst, temp_inst, eff_damped), ac_wp_array)
-                )
-
-        # Clamp the power generated to the AC power of the inverter(s). With a
-        # shared inverter the combined output is clamped to its capacity; with
-        # per-array inverters each array was already clamped individually, so
-        # the combined output is limited by the sum of all capacities.
-        ac_kwp_total = (
-            self.ac_kwp[0] if self.shared_inverter else sum(self.ac_kwp)
-        )
-        ac_wp = ac_kwp_total * 1000  # Convert kW to W
-        for time in w_avg:
-            w_avg[time] = min(w_avg[time], ac_wp)
-        for time in w_inst:
-            w_inst[time] = min(w_inst[time], ac_wp)
-
-        # Convert already-combined and inverter-clipped average power to exact
-        # energy for each half-open interval [time, time + 15 minutes).
         wh_period_15m = _quarter_hour_energy(w_avg)
+        wh_period = hourly_average_power(w_avg)
+        wh_days = daily_energy(wh_period, wh_days)
 
-        # Calculate the average power generated per hour
-        wh_period: dict[dt, int] = {}
-        wh_period_count: dict[dt, int] = {}
-        for time, power in w_avg.items():
-            hour = time.replace(minute=0, second=0, microsecond=0)
-            wh_period[hour] = wh_period.get(hour, 0) + power
-            wh_period_count[hour] = wh_period_count.get(hour, 0) + 1
-        for time in wh_period:
-            wh_period[time] /= wh_period_count[time]
-
-        # Calculate the total energy produced per day
-        for time, power in wh_period.items():
-            day = time.date()
-            wh_days[day] = wh_days.get(day, 0) + power
-
-        # Return the estimate object
         return Estimate(
             watts=w_inst,
             wh_period=wh_period,
