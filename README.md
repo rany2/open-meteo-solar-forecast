@@ -90,6 +90,7 @@ if __name__ == "__main__":
 | `declination` | `int \| list[int] \| tuple[int, ...]` | The tilt of the solar panels (required) |
 | `azimuth` | `int \| list[int] \| tuple[int, ...]` | The direction the solar panels are facing, using the Open-Meteo convention: 0 = south, -90 = east, 90 = west, ±180 = north. To convert a compass bearing (0 = north, 90 = east, 180 = south, 270 = west), subtract 180. (required) |
 | `dc_kwp` | `float \| list[float] \| tuple[float, ...]` | The size of the solar panels in kWp (required) |
+| `ac_kwp` | `float \| list[float \| None] \| tuple[float \| None, ...]` | The inverter capacity in kW. A scalar models a single inverter shared by all arrays (the combined output is clamped); a list/tuple models one inverter per array (each array's output is clamped individually). `None` entries mean no limit for that array. (optional, default = no limit) |
 | `tracking` | `str \| list[str] \| tuple[str, ...]` | Solar tracker type: `"none"`, `"azimuth"`, `"tilt"` or `"dual"` (optional, default = "none") |
 | `use_horizon` | `bool \| list[bool] \| tuple[bool, ...]` | Whether to use horizon shading (optional, default = False) |
 | `partial_shading` | `bool \| list[bool] \| tuple[bool, ...]` | Whether to use interpret horizon shading as partial [experimental] (optional, default = False) |
@@ -123,6 +124,28 @@ async with OpenMeteoSolarForecast(
 
 Scalar values are still supported and are automatically applied to all arrays
 when mixed with list/tuple inputs.
+
+### Multiple inverters
+
+If each array is connected to its own inverter, pass `ac_kwp` as a list/tuple
+with one capacity per array. Each array's output is then clamped to its own
+inverter capacity before the outputs are combined:
+
+```python
+async with OpenMeteoSolarForecast(
+    latitude=[52.16, 52.16],
+    longitude=[4.47, 4.47],
+    declination=[20, 35],
+    azimuth=[-90, 90],
+    dc_kwp=[2.4, 1.8],
+    ac_kwp=[2.0, 1.5],  # one inverter per array
+) as forecast:
+    estimate = await forecast.estimate()
+```
+
+Use `None` for arrays without an inverter limit, e.g. `ac_kwp=[2.0, None]`.
+A scalar `ac_kwp` keeps the previous behaviour: a single inverter shared by
+all arrays, clamping the combined output.
 
 The **horizon map** is a tuple of 2-tuples, where each 2-tuple consists of (azimuth,elevation). Azimuth is the compass direction in degrees (0° = north, 180° = south). The horizon map has to cover the whole range of azimuths that the sun travels through over the year (recommendation: plot the horizon from 0 to 360°). Elevation is the associated angle in degrees of any object (hill, tree, ...) casting a shadow on the modules. The elevation angle has to be in the range 0° (flat, ideal horizon) to 90° (in the sky directly over the modules). The map has to be monotonic on the azimuth axis, however this is not checked by the script! Elevation values in between are interpolated along the azimuth axis, thus non-monotonic values will give wrong results. The horizon map can also be passed from a text file, see the included example estimate_horizon.py.
 

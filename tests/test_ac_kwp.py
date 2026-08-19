@@ -1,0 +1,133 @@
+"""Tests for per-array inverter (AC) capacity support."""
+
+# ruff: noqa: S101
+
+import unittest
+from datetime import datetime, timezone
+
+from open_meteo_solar_forecast import OpenMeteoSolarForecast
+from open_meteo_solar_forecast.exceptions import OpenMeteoSolarForecastConfigError
+
+
+def _make_forecast(**kwargs) -> OpenMeteoSolarForecast:
+    """Create a two-array forecast object with sensible defaults."""
+    defaults = {
+        "latitude": [48.0, 48.0],
+        "longitude": [11.0, 11.0],
+        "declination": [20, 30],
+        "azimuth": [0, 0],
+        "dc_kwp": [2.0, 2.0],
+    }
+    defaults.update(kwargs)
+    return OpenMeteoSolarForecast(**defaults)
+
+
+class AcKwpConfigTests(unittest.TestCase):
+    """Verify ac_kwp validation and normalization."""
+
+    def test_default_is_shared_and_unlimited(self) -> None:
+        """Default to a shared inverter with unlimited capacity."""
+        forecast = _make_forecast()
+        assert forecast.shared_inverter is True
+        assert forecast.ac_kwp == [float("inf"), float("inf")]
+
+    def test_scalar_is_shared_inverter(self) -> None:
+        """Interpret a scalar as one inverter shared by all arrays."""
+        forecast = _make_forecast(ac_kwp=3.0)
+        assert forecast.shared_inverter is True
+        assert forecast.ac_kwp == [3.0, 3.0]
+
+    def test_list_is_per_array_inverters(self) -> None:
+        """Interpret a list as one inverter per array."""
+        forecast = _make_forecast(ac_kwp=[1.5, 2.5])
+        assert forecast.shared_inverter is False
+        assert forecast.ac_kwp == [1.5, 2.5]
+
+    def test_none_entry_means_unlimited(self) -> None:
+        """Allow None entries for arrays without an inverter limit."""
+        forecast = _make_forecast(ac_kwp=[1.5, None])
+        assert forecast.shared_inverter is False
+        assert forecast.ac_kwp == [1.5, float("inf")]
+
+    def test_length_mismatch_rejected(self) -> None:
+        """Reject ac_kwp lists that do not match the number of arrays."""
+        with self.assertRaises(OpenMeteoSolarForecastConfigError):
+            _make_forecast(ac_kwp=[1.0, 2.0, 3.0])
+
+    def test_non_positive_rejected(self) -> None:
+        """Reject zero or negative inverter capacities."""
+        with self.assertRaises(OpenMeteoSolarForecastConfigError):
+            _make_forecast(ac_kwp=0.0)
+        with self.assertRaises(OpenMeteoSolarForecastConfigError):
+            _make_forecast(ac_kwp=[1.0, -2.0])
+
+
+def _fake_api_data() -> dict:
+    """Build a minimal API response producing 2000 W per 2 kWp array."""
+    tz = timezone.utc
+    t0 = int(datetime(2026, 8, 14, 12, 0, tzinfo=tz).timestamp())
+    t1 = t0 + 900
+    day = int(datetime(2026, 8, 14, 0, 0, tzinfo=tz).timestamp())
+    sunrise = int(datetime(2026, 8, 14, 6, 0, tzinfo=tz).timestamp())
+    sunset = int(datetime(2026, 8, 14, 20, 0, tzinfo=tz).timestamp())
+    # With GTI = 1000 W/m² (G_STC) and an ambient temperature chosen so the
+    # cell temperature equals STC (25°C), each array produces exactly dc_wp.
+    t_amb = 25.0 - 1000.0 * 0.0342
+    return {
+        "utc_offset_seconds": 0,
+        "minutely_15": {
+            "time": [t0, t1],
+            "global_tilted_irradiance": [1000.0, 1000.0],
+            "global_tilted_irradiance_instant": [1000.0, 1000.0],
+            "diffuse_radiation": [0.0, 0.0],
+            "diffuse_radiation_instant": [0.0, 0.0],
+            "direct_radiation": [1000.0, 1000.0],
+            "direct_radiation_instant": [1000.0, 1000.0],
+            "snow_depth": [0.0, 0.0],
+            "temperature_2m": [t_amb, t_amb],
+        },
+        "daily": {
+            "time": [day],
+            "sunrise": [sunrise],
+            "sunset": [sunset],
+        },
+    }
+
+
+class AcKwpClampTests(unittest.IsolatedAsyncioTestCase):
+    """Verify inverter clamping behaviour in estimate()."""
+
+    @staticmethod
+    async def _estimate_total(forecast: OpenMeteoSolarForecast) -> float:
+        async def fake_request(uri, *, params=None):  # noqa: ARG001
+            return _fake_api_data()
+
+        forecast._request = fake_request  # noqa: SLF001
+        estimate = await forecast.estimate()
+        assert len(estimate.watts) == 1
+        return next(iter(estimate.watts.values()))
+
+    async def test_no_inverter_limit(self) -> None:
+        """Sum both arrays without clamping when no capacity is set."""
+        total = await self._estimate_total(_make_forecast())
+        assert total == 4000
+
+    async def test_shared_inverter_clamps_combined_output(self) -> None:
+        """Clamp the combined output to a shared inverter's capacity."""
+        total = await self._estimate_total(_make_forecast(ac_kwp=1.0))
+        assert total == 1000
+
+    async def test_per_array_inverters_clamp_individually(self) -> None:
+        """Clamp each array to its own inverter capacity before summing."""
+        # Array 1 (2000 W) clamped to 1000 W, array 2 (2000 W) unclamped.
+        total = await self._estimate_total(_make_forecast(ac_kwp=[1.0, 3.0]))
+        assert total == 3000
+
+    async def test_per_array_none_entry_is_unlimited(self) -> None:
+        """Leave arrays with a None capacity unclamped."""
+        total = await self._estimate_total(_make_forecast(ac_kwp=[1.0, None]))
+        assert total == 3000
+
+
+if __name__ == "__main__":
+    unittest.main()

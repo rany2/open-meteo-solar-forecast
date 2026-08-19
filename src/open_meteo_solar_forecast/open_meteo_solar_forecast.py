@@ -47,7 +47,7 @@ class OpenMeteoSolarForecast:
     past_days: int = 92
     forecast_days: int = 16
 
-    ac_kwp: float | None = None
+    ac_kwp: float | list[float | None] | None = None
     api_key: str | None = None
     base_url: str | None = None
     weather_model: str | None = None
@@ -153,6 +153,20 @@ class OpenMeteoSolarForecast:
             "horizon_map", self.dc_kwp, tuple_as_list=False
         )
         self.max_snowcover_depth_cm = test_param_len("max_snowcover_depth_cm", self.dc_kwp)
+
+        # A scalar ac_kwp models a single shared inverter that clamps the
+        # combined output of all arrays. A list/tuple models one inverter per
+        # array, clamping each array's output individually. None entries mean
+        # that array's inverter capacity is unlimited.
+        self.shared_inverter = not is_list_like(self.ac_kwp)
+        self.ac_kwp = [
+            float("inf") if cap is None else cap
+            for cap in test_param_len("ac_kwp", self.dc_kwp)
+        ]
+        for ac_kwp in self.ac_kwp:
+            if ac_kwp <= 0:
+                msg = f"ac_kwp must be greater than 0, got {ac_kwp}"
+                raise OpenMeteoSolarForecastConfigError(msg)
 
     async def _request(
         self,
@@ -369,6 +383,7 @@ class OpenMeteoSolarForecast:
             partial_shading,
             horizon_map,
             max_snowcover_depth_cm,
+            ac_kwp,
         ) in zip(
             self.azimuth,
             self.declination,
@@ -383,6 +398,7 @@ class OpenMeteoSolarForecast:
             self.partial_shading,
             self.horizon_map,
             self.max_snowcover_depth_cm,
+            self.ac_kwp,
             strict=True,
         ):
             '''
@@ -488,6 +504,10 @@ class OpenMeteoSolarForecast:
             # Convert kW to W
             dc_wp = dc_kwp * 1000
 
+            # Per-array inverter clamp (only when per-array capacities are
+            # given; a shared inverter clamps the combined output below)
+            ac_wp_array = float("inf") if self.shared_inverter else ac_kwp * 1000
+
             for i, time in enumerate(time_arr):
                 # Skip the first element as we need the previous element to calculate
                 # the average temperature for the current time
@@ -560,12 +580,23 @@ class OpenMeteoSolarForecast:
                     irr_avg *= snowcover_factor
                     irr_inst *= snowcover_factor
 
-                # Calculate and store the power generated
-                w_avg[time_start] += gen_power(irr_avg, temp_avg, eff_damped)
-                w_inst[time_start] += gen_power(irr_inst, temp_inst, eff_damped)
+                # Calculate and store the power generated, clamped to the
+                # array's own inverter capacity when one is configured
+                w_avg[time_start] += round(
+                    min(gen_power(irr_avg, temp_avg, eff_damped), ac_wp_array)
+                )
+                w_inst[time_start] += round(
+                    min(gen_power(irr_inst, temp_inst, eff_damped), ac_wp_array)
+                )
 
-        # Clamp the power generated to the AC power
-        ac_wp = self.ac_kwp * 1000  # Convert kW to W
+        # Clamp the power generated to the AC power of the inverter(s). With a
+        # shared inverter the combined output is clamped to its capacity; with
+        # per-array inverters each array was already clamped individually, so
+        # the combined output is limited by the sum of all capacities.
+        ac_kwp_total = (
+            self.ac_kwp[0] if self.shared_inverter else sum(self.ac_kwp)
+        )
+        ac_wp = ac_kwp_total * 1000  # Convert kW to W
         for time in w_avg:
             w_avg[time] = min(w_avg[time], ac_wp)
         for time in w_inst:
