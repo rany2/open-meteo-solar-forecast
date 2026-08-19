@@ -9,7 +9,7 @@ from typing import Any
 
 import numpy
 import pandas as pd
-from pvlib import irradiance, solarposition
+from pvlib import atmosphere, iam, irradiance, solarposition
 
 
 def solar_position(
@@ -28,6 +28,11 @@ def compute_gti(
 ) -> pd.Series:
     """Transpose horizontal irradiance components onto the array plane.
 
+    Uses the Perez-Driesse sky-diffuse model (a continuous, more accurate
+    reformulation of the Perez model) and applies incidence-angle modifier
+    (IAM) reflection losses to the beam and diffuse components, so the
+    returned value is the effective irradiance reaching the cells.
+
     Azimuth uses the Open-Meteo convention (0 = South, -90 = East, 90 = West)
     and is converted to the pvlib convention (0 = North, 90 = East).
     """
@@ -39,18 +44,42 @@ def compute_gti(
         surface_tilt = solpos["apparent_zenith"].clip(0.0, 90.0)
     if tracking in ("azimuth", "dual"):
         surface_azimuth = solpos["azimuth"]
+
+    ghi_series = pd.Series(ghi, index=times, dtype=float)
+    dhi_series = pd.Series(dhi, index=times, dtype=float)
+    dni_series = pd.Series(dni, index=times, dtype=float)
+
     total = irradiance.get_total_irradiance(
         surface_tilt,
         surface_azimuth,
         solpos["apparent_zenith"],
         solpos["azimuth"],
-        pd.Series(dni, index=times, dtype=float),
-        pd.Series(ghi, index=times, dtype=float),
-        pd.Series(dhi, index=times, dtype=float),
+        dni_series,
+        ghi_series,
+        dhi_series,
         dni_extra=irradiance.get_extra_radiation(times),
-        model="haydavies",
+        airmass=atmosphere.get_relative_airmass(solpos["apparent_zenith"]),
+        albedo=array["albedo"],
+        model="perez-driesse",
     )
-    return total["poa_global"].clip(lower=0.0)
+
+    # Reflection (IAM) losses: beam via the physical (Fresnel) model,
+    # sky/ground diffuse via Marion's integration of the same model.
+    aoi = irradiance.aoi(
+        surface_tilt, surface_azimuth, solpos["apparent_zenith"], solpos["azimuth"]
+    )
+    iam_beam = iam.physical(aoi)
+    iam_diffuse = iam.marion_diffuse("physical", surface_tilt)
+
+    poa = (
+        total["poa_direct"] * iam_beam
+        + total["poa_sky_diffuse"] * iam_diffuse["sky"]
+        + total["poa_ground_diffuse"] * iam_diffuse["ground"]
+    )
+
+    # The Perez model yields NaN when the sun is below the horizon (airmass
+    # undefined); there is no irradiance to transpose then, so use zero.
+    return poa.fillna(0.0).clip(lower=0.0)
 
 
 def check_horizon_shading(

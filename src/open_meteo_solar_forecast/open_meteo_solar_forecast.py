@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, timedelta, timezone
@@ -28,6 +27,7 @@ from .params import (
     normalize_param,
     normalize_required,
     validate_ac_kwp,
+    validate_albedo,
     validate_azimuth,
     validate_tracking,
 )
@@ -48,14 +48,6 @@ from .sun import (
 )
 
 __all__ = ["OpenMeteoSolarForecast", "_quarter_hour_energy"]
-
-
-def _is_missing(*values: float | None) -> bool:
-    """Check if any value is missing (None or NaN)."""
-    return any(
-        value is None or (isinstance(value, float) and math.isnan(value))
-        for value in values
-    )
 
 
 @dataclass
@@ -83,6 +75,7 @@ class OpenMeteoSolarForecast:
     partial_shading: bool | list[bool] = False
     horizon_map: tuple(tuple(float)) | list[tuple(tuple(float))] = ((0.0,20.0),(360.0,20.0))
     max_snowcover_depth_cm: float | list[float] = 0.0
+    albedo: float | list[float] = 0.25
 
     session: ClientSession | None = None
     _close_session: bool = False
@@ -142,6 +135,8 @@ class OpenMeteoSolarForecast:
         self.partial_shading = normalize("partial_shading")
         self.horizon_map = normalize("horizon_map", tuple_as_list=False)
         self.max_snowcover_depth_cm = normalize("max_snowcover_depth_cm")
+        self.albedo = normalize("albedo")
+        validate_albedo(self.albedo)
 
         # A scalar ac_kwp models a single shared inverter that clamps the
         # combined output of all arrays. A list/tuple models one inverter per
@@ -248,6 +243,7 @@ class OpenMeteoSolarForecast:
             "partial_shading",
             "horizon_map",
             "max_snowcover_depth_cm",
+            "albedo",
             "ac_kwp",
         )
         values = zip(*(getattr(self, name) for name in names), strict=True)
@@ -261,7 +257,8 @@ class OpenMeteoSolarForecast:
             ",shortwave_radiation,shortwave_radiation_instant"
             ",diffuse_radiation,diffuse_radiation_instant"
             ",direct_normal_irradiance,direct_normal_irradiance_instant"
-            ",snow_depth",
+            ",snow_depth,wind_speed_10m",
+            "wind_speed_unit": "ms",
             "forecast_days": str(self.forecast_days),
             "past_days": str(self.past_days),
             "timezone": "auto",
@@ -325,6 +322,8 @@ class OpenMeteoSolarForecast:
         dni_inst_arr = minutely["direct_normal_irradiance_instant"]
         snow_depth_arr = minutely["snow_depth"]
         temp_arr = minutely["temperature_2m"]
+        # Wind speed (m/s) for the Faiman cell temperature model.
+        wind_arr = minutely["wind_speed_10m"]
 
         time_arr = weather["time_arr"]
         solpos_inst = weather["solpos_inst"]
@@ -371,13 +370,6 @@ class OpenMeteoSolarForecast:
 
         for i, time in enumerate(time_arr):
             if i == 0:
-                continue
-
-            if _is_missing(
-                gti_avg_arr[i],
-                gti_inst_arr[i],
-                *temp_arr[i - 1 : i + 1],
-            ):
                 continue
 
             g_avg = gti_avg_arr[i]
@@ -428,11 +420,19 @@ class OpenMeteoSolarForecast:
                 irr_avg *= factor
                 irr_inst *= factor
 
+            wind = wind_arr[i]
+
             w_avg[time_start] += round(
-                min(gen_power(irr_avg, temp_avg, eff_damped, dc_wp), ac_wp_array)
+                min(
+                    gen_power(irr_avg, temp_avg, wind, eff_damped, dc_wp),
+                    ac_wp_array,
+                )
             )
             w_inst[time_start] += round(
-                min(gen_power(irr_inst, temp_inst, eff_damped, dc_wp), ac_wp_array)
+                min(
+                    gen_power(irr_inst, temp_inst, wind, eff_damped, dc_wp),
+                    ac_wp_array,
+                )
             )
 
     def _clamp_to_inverter(

@@ -63,14 +63,15 @@ class AcKwpConfigTests(unittest.TestCase):
 
 
 def _fake_api_data() -> dict:
-    """Build a minimal API response producing 2000 W per 2 kWp array."""
+    """Build a minimal API response producing high output per 2 kWp array."""
     tz = timezone.utc
     t0 = int(datetime(2026, 8, 14, 12, 0, tzinfo=tz).timestamp())
     t1 = t0 + 900
-    # Pure diffuse irradiance on a horizontal plane (tilt 0) gives an exact
-    # GTI of 1000 W/m² (G_STC). With an ambient temperature chosen so the
-    # cell temperature equals STC (25°C), each array produces exactly dc_wp.
-    t_amb = 25.0 - 1000.0 * 0.0342
+    # Pure diffuse irradiance on a horizontal plane (tilt 0) gives a GTI
+    # close to 1000 W/m² (G_STC) reduced only by diffuse IAM reflection
+    # losses, so each 2 kWp array produces roughly (but not exactly) 2 kW.
+    # A cool ambient temperature keeps the Faiman cell temperature near STC.
+    t_amb = -9.2
     return {
         "utc_offset_seconds": 0,
         "minutely_15": {
@@ -83,6 +84,7 @@ def _fake_api_data() -> dict:
             "direct_normal_irradiance_instant": [0.0, 0.0],
             "snow_depth": [0.0, 0.0],
             "temperature_2m": [t_amb, t_amb],
+            "wind_speed_10m": [1.0, 1.0],
         },
     }
 
@@ -100,10 +102,17 @@ class AcKwpClampTests(unittest.IsolatedAsyncioTestCase):
         assert len(estimate.watts) == 1
         return next(iter(estimate.watts.values()))
 
+    async def _per_array_baseline(self) -> float:
+        """Return the unclamped output of a single array."""
+        total = await self._estimate_total(_make_forecast())
+        return total / 2
+
     async def test_no_inverter_limit(self) -> None:
         """Sum both arrays without clamping when no capacity is set."""
         total = await self._estimate_total(_make_forecast())
-        assert total == 4000
+        # Each 2 kWp array produces near-STC output, reduced by diffuse IAM
+        # reflection losses and the Faiman cell temperature model.
+        assert 3000 < total < 4000
 
     async def test_shared_inverter_clamps_combined_output(self) -> None:
         """Clamp the combined output to a shared inverter's capacity."""
@@ -112,14 +121,16 @@ class AcKwpClampTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_per_array_inverters_clamp_individually(self) -> None:
         """Clamp each array to its own inverter capacity before summing."""
-        # Array 1 (2000 W) clamped to 1000 W, array 2 (2000 W) unclamped.
+        # Array 1 clamped to 1000 W, array 2 (~1900 W) unclamped.
+        baseline = await self._per_array_baseline()
         total = await self._estimate_total(_make_forecast(ac_kwp=[1.0, 3.0]))
-        assert total == 3000
+        assert total == 1000 + baseline
 
     async def test_per_array_none_entry_is_unlimited(self) -> None:
         """Leave arrays with a None capacity unclamped."""
+        baseline = await self._per_array_baseline()
         total = await self._estimate_total(_make_forecast(ac_kwp=[1.0, None]))
-        assert total == 3000
+        assert total == 1000 + baseline
 
 
 if __name__ == "__main__":

@@ -72,6 +72,14 @@ def validate_tracking(values: list[str]) -> None:
             raise OpenMeteoSolarForecastConfigError(msg)
 
 
+def validate_albedo(values: list[float]) -> None:
+    """Validate ground albedo values."""
+    for albedo in values:
+        if not 0.0 <= albedo <= 1.0:
+            msg = f"albedo must be within [0, 1], got {albedo}"
+            raise OpenMeteoSolarForecastConfigError(msg)
+
+
 def validate_ac_kwp(values: list[float]) -> None:
     """Validate inverter capacity values."""
     for ac_kwp in values:
