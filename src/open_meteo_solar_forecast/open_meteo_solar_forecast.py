@@ -529,11 +529,18 @@ class OpenMeteoSolarForecast:
                 d_inst = dhi_inst_arr[i]
                 dr_avg = dr_avg_arr[i]
                 dr_inst = dr_inst_arr[i]
+
+                # Only shaded intervals need diffuse and direct radiation.
+                if horizon_shading[i] and (
+                    None in (d_avg, d_inst)
+                    or (partial_shading and None in (dr_avg, dr_inst))
+                ):
+                    continue
                 
                 # Calculate diffuse contribution (only if partial_shading enabled)
                 # prefer this over simple ratio d/dr, because this may turn 0 unexpectedly in morning/evening conditions, when dr = 0 
                 # clamp to minimum 0 for possible implausible sets
-                if use_horizon and partial_shading:
+                if horizon_shading[i] and partial_shading:
                     if (d_avg + dr_avg) > 0:
                         f_avg = max(d_avg/(d_avg + dr_avg) , 0.0)
                     else:
@@ -575,7 +582,7 @@ class OpenMeteoSolarForecast:
                     
                 # Apply snow coverage as linear regression from 0 (panels not covered) to max_snowcover_depth_cm (in cm, panels producing 0 W)
                 # multiply snow_depth by 100 (m to cm) - clamp to 0...1 interval
-                if max_snowcover_depth_cm > 0:
+                if max_snowcover_depth_cm > 0 and snow_depth_arr[i] is not None:
                     snowcover_factor =1.0 - min( (snow_depth_arr [i]*100)/max_snowcover_depth_cm , 1.0)
                     irr_avg *= snowcover_factor
                     irr_inst *= snowcover_factor
