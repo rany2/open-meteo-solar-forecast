@@ -10,6 +10,8 @@ def _timed_value(at: dt.datetime, data: dict[dt.datetime, int]) -> int | None:
     """Return the value for a specific time."""
     value = None
     for timestamp, cur_value in data.items():
+        if timestamp == at:
+            return cur_value
         if timestamp > at:
             return value
         value = cur_value
@@ -85,6 +87,13 @@ class Estimate:
     wh_days: dict[dt.datetime, int]
     api_timezone: dt.timezone
     wh_period_15m: dict[dt.datetime, float] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        """Order merged forecast series once for chronological lookups."""
+        self.watts = dict(sorted(self.watts.items()))
+        self.wh_period = dict(sorted(self.wh_period.items()))
+        self.wh_days = dict(sorted(self.wh_days.items()))
+        self.wh_period_15m = dict(sorted(self.wh_period_15m.items()))
 
     @property
     def timezone(self) -> timezone:
