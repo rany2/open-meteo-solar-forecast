@@ -38,28 +38,25 @@ def _interval_value_sum(
 
 def _interval_value_sum_w_to_wh(
     interval_begin: dt.datetime, interval_end: dt.datetime, data: dict[dt.datetime, int]
-) -> int:
+) -> float:
     """Convert W to Wh and return the sum of values in interval."""
-    total = 0
+    total = 0.0
     sorted_timestamps = sorted(data.keys())
 
     for i, timestamp in enumerate(sorted_timestamps):
-        # Skip all until this hour
-        if timestamp < interval_begin:
-            continue
-
         if timestamp >= interval_end:
             break
 
-        # Calculate the time difference to the next timestamp or interval_end
-        next_timestamp = (
-            sorted_timestamps[i + 1] if i + 1 < len(sorted_timestamps) else interval_end
-        )
-        if next_timestamp > interval_end:
-            next_timestamp = interval_end
+        # Intersect each forecast interval with the requested time range.
+        # Do not extend a quarter-hour sample across missing forecast data.
+        start = max(timestamp, interval_begin)
+        end = min(timestamp + dt.timedelta(minutes=15), interval_end)
+        if i + 1 < len(sorted_timestamps):
+            end = min(end, sorted_timestamps[i + 1])
+        if end <= start:
+            continue
 
-        # Calculate the duration in hours
-        duration_hours = (next_timestamp - timestamp).total_seconds() / 3600
+        duration_hours = (end - start).total_seconds() / 3600
 
         # Add the energy in watt-hours
         total += data[timestamp] * duration_hours
@@ -102,7 +99,7 @@ class Estimate:
         return self.day_production(self.now().date() + dt.timedelta(days=1))
 
     @property
-    def energy_production_today_remaining(self) -> int:
+    def energy_production_today_remaining(self) -> float:
         """Return estimated energy produced in rest of today."""
         return _interval_value_sum_w_to_wh(
             self.now(),
