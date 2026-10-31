@@ -606,15 +606,11 @@ class OpenMeteoSolarForecast:
         # energy for each half-open interval [time, time + 15 minutes).
         wh_period_15m = _quarter_hour_energy(w_avg)
 
-        # Calculate the average power generated per hour
-        wh_period: dict[dt, int] = {}
-        wh_period_count: dict[dt, int] = {}
-        for time, power in w_avg.items():
+        # Sum interval energy without extrapolating across missing quarters.
+        wh_period: dict[dt, float] = {}
+        for time, energy in wh_period_15m.items():
             hour = time.replace(minute=0, second=0, microsecond=0)
-            wh_period[hour] = wh_period.get(hour, 0) + power
-            wh_period_count[hour] = wh_period_count.get(hour, 0) + 1
-        for time in wh_period:
-            wh_period[time] /= wh_period_count[time]
+            wh_period[hour] = wh_period.get(hour, 0) + energy
 
         # Calculate the total energy produced per day
         for time, power in wh_period.items():
