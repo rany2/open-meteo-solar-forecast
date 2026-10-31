@@ -2,9 +2,11 @@
 
 import unittest
 from datetime import UTC, datetime, timedelta
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
+from open_meteo_solar_forecast import OpenMeteoSolarForecast
 from open_meteo_solar_forecast.models import Estimate, _interval_value_sum_w_to_wh
+from tests.test_ac_kwp import _fake_api_data
 
 
 class RemainingEnergyTests(unittest.TestCase):
@@ -68,3 +70,69 @@ class RemainingEnergyTests(unittest.TestCase):
             ),
             0,
         )
+
+    def test_interval_energy_takes_precedence_over_instantaneous_power(self):
+        estimate = Estimate(
+            {self.start: 0},
+            {},
+            {},
+            UTC,
+            {
+                self.start: 250,
+                self.start + timedelta(minutes=15): 125,
+                self.start + timedelta(minutes=30): 0,
+            },
+        )
+        with patch.object(
+            Estimate, "now", return_value=self.start + timedelta(minutes=5)
+        ):
+            self.assertAlmostEqual(
+                estimate.energy_production_today_remaining, 250 * 2 / 3 + 125
+            )
+
+    def test_zero_interval_energy_does_not_fall_back_to_instantaneous_power(self):
+        estimate = Estimate({self.start: 1000}, {}, {}, UTC, {self.start: 0})
+        with patch.object(Estimate, "now", return_value=self.start):
+            self.assertEqual(estimate.energy_production_today_remaining, 0)
+
+    def test_interval_energy_gaps_boundaries_and_midnight(self):
+        start = self.start.replace(hour=23)
+        midnight = start + timedelta(hours=1)
+        periods = {
+            midnight: 1000,
+            start + timedelta(minutes=45): 300,
+            start: 150,
+        }
+        estimate = Estimate({start: 0}, {}, {}, UTC, periods)
+        for time, expected in (
+            (start, 450),
+            (start + timedelta(minutes=5), 400),
+            (start + timedelta(minutes=15), 300),
+            (start + timedelta(minutes=30), 300),
+            (start + timedelta(minutes=50), 200),
+            (midnight + timedelta(minutes=15), 0),
+        ):
+            with self.subTest(time=time):
+                with patch.object(Estimate, "now", return_value=time):
+                    self.assertAlmostEqual(
+                        estimate.energy_production_today_remaining, expected
+                    )
+
+
+class RemainingForecastEnergyTests(unittest.IsolatedAsyncioTestCase):
+    """Use the real calculation to distinguish average and instant radiation."""
+
+    async def test_remaining_matches_interval_energy_when_instant_radiation_is_zero(
+        self,
+    ):
+        data = _fake_api_data()
+        data["minutely_15"]["global_tilted_irradiance_instant"] = [0, 0]
+        forecast = OpenMeteoSolarForecast(
+            latitude=50, longitude=10, azimuth=0, declination=25, dc_kwp=1
+        )
+        with patch.object(forecast, "_request", AsyncMock(return_value=data)):
+            estimate = await forecast.estimate()
+        start = min(estimate.wh_period_15m)
+        with patch.object(Estimate, "now", return_value=start):
+            self.assertEqual(sum(estimate.wh_period_15m.values()), 250)
+            self.assertEqual(estimate.energy_production_today_remaining, 250)

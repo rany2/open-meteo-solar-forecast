@@ -101,10 +101,24 @@ class Estimate:
     @property
     def energy_production_today_remaining(self) -> float:
         """Return estimated energy produced in rest of today."""
+        now = self.now()
+        midnight = now.replace(hour=0, minute=0, second=0, microsecond=0) + dt.timedelta(
+            days=1
+        )
+        if self.wh_period_15m:
+            total = 0.0
+            interval = dt.timedelta(minutes=15)
+            for timestamp, energy in self.wh_period_15m.items():
+                start = max(timestamp, now)
+                end = min(timestamp + interval, midnight)
+                if end > start:
+                    total += energy * ((end - start) / interval)
+            return total
+
+        # Older callers and stored forecasts may only contain power samples.
         return _interval_value_sum_w_to_wh(
-            self.now(),
-            self.now().replace(hour=0, minute=0, second=0, microsecond=0)
-            + dt.timedelta(days=1),
+            now,
+            midnight,
             self.watts,
         )
 
