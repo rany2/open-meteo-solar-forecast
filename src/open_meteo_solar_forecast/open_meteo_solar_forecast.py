@@ -550,10 +550,10 @@ class OpenMeteoSolarForecast:
 
                 # Get the temperature for average and instantaneous values
                 temp_avg = (temp_arr[i] + temp_arr[i - 1]) / 2
-                temp_inst = temp_arr[i - 1]
+                temp_inst = temp_arr[i]
 
-                # For minutely data, the GTI start time is 15 minutes before the time
-                # even for instant data (since the data is averaged over 15 minutes)
+                # Average radiation describes the preceding 15-minute interval;
+                # instantaneous radiation and temperature use the API timestamp.
                 time_start = time - timedelta(minutes=15)
 
                 # Add the damping factor to the efficiency
@@ -585,7 +585,7 @@ class OpenMeteoSolarForecast:
                 w_avg[time_start] += round(
                     min(gen_power(irr_avg, temp_avg, eff_damped), ac_wp_array)
                 )
-                w_inst[time_start] += round(
+                w_inst[time] += round(
                     min(gen_power(irr_inst, temp_inst, eff_damped), ac_wp_array)
                 )
 
