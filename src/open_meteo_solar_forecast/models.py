@@ -108,7 +108,11 @@ class Estimate:
         if self.wh_period_15m:
             total = 0.0
             interval = dt.timedelta(minutes=15)
+            cutoff = now - interval
             for timestamp, energy in self.wh_period_15m.items():
+                # Only unfinished intervals from today need prorating.
+                if timestamp <= cutoff or timestamp >= midnight:
+                    continue
                 start = max(timestamp, now)
                 end = min(timestamp + interval, midnight)
                 if end > start:
