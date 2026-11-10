@@ -525,10 +525,13 @@ class OpenMeteoSolarForecast:
                 # Get the GTI for average and instantaneous values
                 g_avg = gti_avg_arr[i]
                 g_inst = gti_inst_arr[i]
-                d_avg = dhi_avg_arr[i]
-                d_inst = dhi_inst_arr[i]
-                dr_avg = dr_avg_arr[i]
-                dr_inst = dr_inst_arr[i]
+                # Diffuse/direct components are only used in the horizon and
+                # partial shading path; treat missing values as 0 instead of
+                # failing the whole estimate (see issue #55)
+                d_avg = dhi_avg_arr[i] or 0.0
+                d_inst = dhi_inst_arr[i] or 0.0
+                dr_avg = dr_avg_arr[i] or 0.0
+                dr_inst = dr_inst_arr[i] or 0.0
                 
                 # Calculate diffuse contribution (only if partial_shading enabled)
                 # prefer this over simple ratio d/dr, because this may turn 0 unexpectedly in morning/evening conditions, when dr = 0 
@@ -575,8 +578,11 @@ class OpenMeteoSolarForecast:
                     
                 # Apply snow coverage as linear regression from 0 (panels not covered) to max_snowcover_depth_cm (in cm, panels producing 0 W)
                 # multiply snow_depth by 100 (m to cm) - clamp to 0...1 interval
+                # A missing snow depth (None in the API response) is treated as
+                # no snow instead of failing the whole estimate (see issue #55)
                 if max_snowcover_depth_cm > 0:
-                    snowcover_factor =1.0 - min( (snow_depth_arr [i]*100)/max_snowcover_depth_cm , 1.0)
+                    snow_depth_cm = (snow_depth_arr[i] or 0.0) * 100
+                    snowcover_factor = 1.0 - min(snow_depth_cm / max_snowcover_depth_cm, 1.0)
                     irr_avg *= snowcover_factor
                     irr_inst *= snowcover_factor
 
